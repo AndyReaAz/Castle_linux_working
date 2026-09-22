@@ -173,6 +173,7 @@ configure_deferred()
     for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
+               TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
                ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
                SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
     do
@@ -208,6 +209,41 @@ build_deferred()
     ls -lh "$OUT/arch/arm/boot/zImage"
     find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
         sort -nr | head -30 || true
+
+    compare_zimages
+}
+
+compare_zimages()
+{
+    control="$ROOT/build-fast/arch/arm/boot/zImage"
+    deferred="$OUT/arch/arm/boot/zImage"
+
+    echo
+    echo "zImage size comparison:"
+    if [ ! -f "$control" ]; then
+        echo "  control:  not available ($control)"
+        echo "  deferred: $(wc -c < "$deferred" | tr -d '[:space:]') bytes"
+        echo "  Build the LZ4 control with build-fast.sh to calculate the delta."
+        return 0
+    fi
+
+    control_bytes="$(wc -c < "$control" | tr -d '[:space:]')"
+    deferred_bytes="$(wc -c < "$deferred" | tr -d '[:space:]')"
+    delta_bytes=$((control_bytes - deferred_bytes))
+
+    printf '  control:   %d bytes\n' "$control_bytes"
+    printf '  deferred:  %d bytes\n' "$deferred_bytes"
+
+    if [ "$delta_bytes" -ge 0 ]; then
+        permille=$((delta_bytes * 1000 / control_bytes))
+        printf '  reduction: %d bytes (%d.%d%%)\n' \
+            "$delta_bytes" "$((permille / 10))" "$((permille % 10))"
+    else
+        growth_bytes=$((-delta_bytes))
+        permille=$((growth_bytes * 1000 / control_bytes))
+        printf '  growth:    %d bytes (%d.%d%%)\n' \
+            "$growth_bytes" "$((permille / 10))" "$((permille % 10))"
+    fi
 }
 
 case "${1:-build}" in
