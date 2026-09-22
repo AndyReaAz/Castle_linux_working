@@ -150,7 +150,7 @@ seed_mode()
 
     local tag stage_dir manifest batch_file marker complete
     tag=$(safe_name "${target_remote}_${target_branch}")
-    local base_workdir=${BATCH_PUSH_WORKDIR:-$SOURCE_GIT_DIR/nextgen-batch-push}
+    local base_workdir=${BATCH_PUSH_WORKDIR:-$(CDPATH= cd -- "$SOURCE_ROOT/.." && pwd)/.nextgen-kernel-transfer}
     stage_dir="$base_workdir/seed-$tag"
     manifest="$stage_dir/.nextgen-batch-files"
     batch_file="$stage_dir/.nextgen-current-batch"
@@ -332,7 +332,7 @@ relay_mode()
 
     local tag relay_dir
     tag=$(safe_name "${source_remote}_${source_branch}")
-    local base_workdir=${BATCH_PUSH_WORKDIR:-$SOURCE_GIT_DIR/nextgen-batch-push}
+    local base_workdir=${BATCH_PUSH_WORKDIR:-$(CDPATH= cd -- "$SOURCE_ROOT/.." && pwd)/.nextgen-kernel-transfer}
     relay_dir="$base_workdir/relay-$tag"
     mkdir -p "$base_workdir"
 
