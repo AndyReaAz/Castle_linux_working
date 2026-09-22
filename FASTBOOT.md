@@ -39,36 +39,61 @@ ownership changes come only after this baseline has been built and timed.
 
 ## Stage 2: deferred modules
 
-`build-fast-deferred.sh` starts from the same known-good NextGen configuration
-and keeps LZ4, but converts selected drivers from built-in to modules only when
-they were built-in in the supplied base config.
+`build-fast-deferred.sh` starts from the same known-good NextGen
+configuration and keeps LZ4, but converts selected non-critical drivers from
+built-in to modules only when they were built-in in the supplied base config.
 
-The first deferred set is intentionally conservative:
+The current deferred set is deliberately conservative:
 
-- `MACB` and `WILC_SPI`
-- `SPI_ATMEL_QUADSPI`, `MTD_SPI_NAND`, and `MTD_SPI_NOR`
-- `APDS9300` and `SENSORS_SHT4x`
-- `IIO_ST_PRESS` and `IIO_ST_PRESS_I2C`
-- `INPUT_DRV260X_HAPTICS`
-- `KXCJK1013`
+- networking: `MACB`, `WILC_SPI`, and `WILC_SDIO`
+- USB host/class support only: USB audio, ACM/USB-serial host drivers,
+  mass-storage, SCSI and `BLK_DEV_SD`
+- CAN: Atmel CAN and M_CAN support
+- camera capture: Atmel ISI and Microchip ISC
+- flash media/controller drivers: Atmel QSPI, SPI NAND and SPI NOR
+- unused SoC/peripheral drivers: legacy Atmel MCI, SoC ADC, crypto engines,
+  AT24 EEPROM and unused PWM blocks
+- application-owned/absent clients: APDS9300, DRV260x and KXCJK1013
 
-It deliberately keeps the SD/MMC rootfs path, ext4, console, display/video,
-Goodix touch, USB, and the complete Atmel SSC/ADS131A audio path built-in.
+The boot-critical and measurement paths are explicitly checked after
+`olddefconfig` and must remain built in:
 
-The output is separate from the control build:
+- SDMMC0/rootfs plus ext4
+- XDMAC
+- HLCDC DRM/fbdev, panel and backlight/PWM
+- Goodix touch
+- SHT4x and LPS22HB pressure/temperature sensor paths
+- the complete Atmel SSC/ADS131A ALSA path
+- the USB gadget/Atmel UDC plus configfs ACM, NCM and FunctionFS support used
+  by the application's existing `USBDeviceRun()` path
+
+Generic kernel Bluetooth is disabled with `CONFIG_BT=n`. The legacy vendor
+WILC source, including its old Bluetooth implementation, is intentionally left
+unchanged because the longer-term direction is a newer Microchip WILC
+driver/kernel rather than maintaining a fork of the legacy vendor code.
+
+WILC Wi-Fi is application-on-demand in the deferred Buildroot profile. The
+WILC interface modules are blacklisted from eudev alias autoloading, then the
+application explicitly modprobes WILC at its existing delayed Wi-Fi stage
+before starting NetworkManager. Other deferred DT modules can still be loaded
+normally by eudev/kmod.
+
+The output is separate from the LZ4 control build:
 
 ```sh
-KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast-deferred.sh config
+KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast.sh build
 KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast-deferred.sh build
 ```
 
-Artifacts are placed in `build-fast-deferred/`. The script prints the zImage
-size reduction relative to `build-fast/` and stages all generated modules
-under `build-fast-deferred/mods/lib/modules/<release>/`.
+Artifacts are placed in `build-fast-deferred/`. The deferred build stages all
+generated modules under
+`build-fast-deferred/mods/lib/modules/<release>/` and reports the exact zImage
+byte and percentage delta against `build-fast/arch/arm/boot/zImage` when the
+control image exists.
 
-The matching Buildroot fast branch packages the complete module tree when one
-exists. eudev module loading and kmod tools are enabled so DT modaliases can
-load deferred drivers after userspace starts.
+The matching Buildroot `chatgpt/fast-boot` branch packages the complete module
+tree, enables eudev module loading and kmod tools, and selects the matched
+deferred zImage/DTB when `build-nextgen-image.sh deferred` is used.
 
 
 ## Display ownership
