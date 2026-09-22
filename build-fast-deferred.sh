@@ -106,10 +106,11 @@ configure_deferred()
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
     # Bluetooth is intentionally absent from the current NextGen product.
-    # Disable the generic Linux Bluetooth stack and the vendor WILC3000
-    # /dev/wilc_bt firmware/control path while retaining WILC Wi-Fi.
+    # Bluetooth userspace is not currently used. Keep the legacy WILC vendor
+    # driver itself unchanged for eventual replacement by the newer Microchip
+    # driver; disabling the generic kernel Bluetooth stack still removes BlueZ/HCI
+    # kernel support from this image.
     "$cfg" --file "$config" -d BT
-    "$cfg" --file "$config" -d WILC_BT
 
     # Network devices not required to mount rootfs, initialise display or
     # start the measurement path.
@@ -168,8 +169,6 @@ configure_deferred()
         die "CONFIG_KERNEL_LZ4 did not remain enabled"
     grep -q '^# CONFIG_BT is not set$' "$config" ||
         die "Bluetooth unexpectedly enabled"
-    grep -q '^# CONFIG_WILC_BT is not set$' "$config" ||
-        die "WILC Bluetooth control path unexpectedly enabled"
 
     for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
