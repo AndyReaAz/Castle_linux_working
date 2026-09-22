@@ -105,12 +105,66 @@ configure_deferred()
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
+    # Network devices not needed for rootfs, display or measurement startup.
     move_if_builtin MACB
     move_if_builtin WILC_SPI
     move_if_builtin WILC_SDIO
+
+    # Bluetooth is not brought up by BluetoothInit(); firmware/HCI startup is
+    # a separate userspace operation, so keep it out of the compressed kernel.
+    move_if_builtin BT_HCIBTUSB
+    move_if_builtin BT_HCIUART
+    move_if_builtin BT_HCIVHCI
+    move_if_builtin BT_RFCOMM
+    move_if_builtin BT_BNEP
+    move_if_builtin BT_HIDP
+    move_if_builtin BT
+
+    # USB device/gadget support is deliberately left alone because the
+    # application starts USBDeviceRun() during normal startup.  These are host
+    # side/class drivers only and can be loaded if an engineering peripheral
+    # actually needs them.
+    move_if_builtin SND_USB_AUDIO
+    move_if_builtin USB_ACM
+    move_if_builtin USB_SERIAL_FTDI_SIO
+    move_if_builtin USB_SERIAL_PL2303
+    move_if_builtin USB_SERIAL
+    move_if_builtin USB_STORAGE
+    move_if_builtin BLK_DEV_SD
+    move_if_builtin SCSI
+
+    # No CAN controller is enabled by the NextGen device tree.
+    move_if_builtin CAN_AT91
+    move_if_builtin CAN_M_CAN_PLATFORM
+    move_if_builtin CAN_M_CAN
+    move_if_builtin CAN
+
+    # Camera capture hardware is not present/enabled on NextGen.
+    move_if_builtin VIDEO_ATMEL_ISI
+    move_if_builtin VIDEO_MICROCHIP_ISC
+
+    # Boot/storage flash is not needed to mount the current SD rootfs.
+    # Keep the MTD/UBI core built in for the future production NAND-root path,
+    # but move the concrete SPI flash controller/media drivers out.
     move_if_builtin SPI_ATMEL_QUADSPI
     move_if_builtin MTD_SPI_NAND
     move_if_builtin MTD_SPI_NOR
+
+    # The old Atmel MCI block is not the SD root controller; NextGen root uses
+    # the SAMA5D2 SDHCI controller, which remains built in and is verified below.
+    move_if_builtin MMC_ATMELMCI
+
+    # Unused SoC peripherals.  The ADS131A measurement path remains built in.
+    move_if_builtin AT91_ADC
+    move_if_builtin AT91_SAMA5D2_ADC
+    move_if_builtin CRYPTO_DEV_ATMEL_AES
+    move_if_builtin CRYPTO_DEV_ATMEL_TDES
+    move_if_builtin CRYPTO_DEV_ATMEL_SHA
+    move_if_builtin EEPROM_AT24
+    move_if_builtin PWM_ATMEL
+    move_if_builtin PWM_ATMEL_TCB
+
+    # Application-owned / absent I2C clients.
     move_if_builtin APDS9300
     move_if_builtin INPUT_DRV260X_HAPTICS
     move_if_builtin KXCJK1013
@@ -145,6 +199,12 @@ build_deferred()
 
     rm -rf "$OUT/mods"
     make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    echo
+    echo "NextGen deferred kernel output:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
+        sort -nr | head -30 || true
 }
 
 case "${1:-build}" in
