@@ -195,7 +195,11 @@ configure_deferred()
     done
 
     # Root SD uses SAMA5D2 SDHCI, not the legacy Atmel MCI driver.
-    move_if_builtin MMC_ATMELMCI
+    # atmel-mci cannot be modularised in this kernel because it directly
+    # references non-exported mmc_pwrseq_alloc()/mmc_pwrseq_free(). There is
+    # no NextGen DT node using it, so remove it rather than producing a broken
+    # atmel-mci.ko.
+    "$cfg" --file "$config" -d MMC_ATMELMCI
 
     # /boot is no longer mounted by mount -a. It is mounted on demand only
     # when the application accesses the U-Boot environment, so the VFAT stack
@@ -230,6 +234,10 @@ configure_deferred()
         die "debugfs unexpectedly enabled"
     grep -q '^# CONFIG_MTD_UBI_FASTMAP is not set$' "$config" ||
         die "UBI fastmap unexpectedly enabled before baseline timing"
+    if grep -Eq '^CONFIG_MMC_ATMELMCI=[ym]$' "$config"; then
+        grep '^CONFIG_MMC_ATMELMCI=' "$config" >&2 || true
+        die "legacy Atmel MCI driver unexpectedly enabled"
+    fi
 
     for sym in MTD_BLOCK MTD_BLOCK_RO FTL NFTL INFTL RFD_FTL SSFDC SM_FTL MTD_SWAP
     do
