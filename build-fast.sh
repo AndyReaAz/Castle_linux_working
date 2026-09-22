@@ -106,6 +106,7 @@ configure_fast()
     # The previous configuration allowed TI_ADS131A=y without the Atmel SSC
     # ASoC DAI being built-in, which caused unresolved helper symbols when
     # linking vmlinux.
+    "$cfg" --file "$config" -m ATMEL_SSC
     "$cfg" --file "$config" -m SND_ATMEL_SOC
     "$cfg" --file "$config" -m SND_ATMEL_SOC_SSC_DMA
     "$cfg" --file "$config" -m TI_ADS131A
@@ -121,7 +122,174 @@ configure_fast()
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
         die "CONFIG_KERNEL_LZ4 did not resolve to y"
 
-    grep -q '^CONFIG_SND_ATMEL_SOC=m$' "$config" ||
+    grep -q '^CONFIG_ATMEL_SSC=m
+
+    grep -q '^CONFIG_SND_ATMEL_SOC_SSC_DMA=m$' "$config" ||
+        die "CONFIG_SND_ATMEL_SOC_SSC_DMA did not resolve to m"
+
+    grep -q '^CONFIG_SND_ATMEL_SOC_SSC=m$' "$config" ||
+        die "CONFIG_SND_ATMEL_SOC_SSC did not resolve to m"
+
+    grep -q '^CONFIG_TI_ADS131A=m$' "$config" ||
+        die "CONFIG_TI_ADS131A did not resolve to m"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE (expected $EXPECTED_RELEASE)"
+
+    show_config
+}
+
+build_fast()
+{
+    make_kernel -j"$JOBS"         zImage         microchip/nextgen.dtb         modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+
+    make_kernel         INSTALL_MOD_PATH="$OUT/mods"         modules_install
+}
+
+show_outputs()
+{
+    if [ -f "$OUT/arch/arm/boot/zImage" ]; then
+        echo
+        echo "Kernel image:"
+        ls -lh "$OUT/arch/arm/boot/zImage"
+    fi
+
+    if [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+    fi
+
+    if [ -d "$OUT/mods/lib/modules/$EXPECTED_RELEASE" ]; then
+        echo "Relevant staged modules:"
+        find "$OUT/mods/lib/modules/$EXPECTED_RELEASE"             -type f             \( -name '*ads131a*.ko' -o -name '*atmel*ssc*.ko' -o -name '*atmel_ssc*.ko' \)             -print || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_fast
+        show_outputs
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    build)
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config" ||
+        die "CONFIG_ATMEL_SSC did not resolve to m"
+
+    grep -q '^CONFIG_SND_ATMEL_SOC=m
+
+    grep -q '^CONFIG_SND_ATMEL_SOC_SSC_DMA=m$' "$config" ||
+        die "CONFIG_SND_ATMEL_SOC_SSC_DMA did not resolve to m"
+
+    grep -q '^CONFIG_SND_ATMEL_SOC_SSC=m$' "$config" ||
+        die "CONFIG_SND_ATMEL_SOC_SSC did not resolve to m"
+
+    grep -q '^CONFIG_TI_ADS131A=m$' "$config" ||
+        die "CONFIG_TI_ADS131A did not resolve to m"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE (expected $EXPECTED_RELEASE)"
+
+    show_config
+}
+
+build_fast()
+{
+    make_kernel -j"$JOBS"         zImage         microchip/nextgen.dtb         modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+
+    make_kernel         INSTALL_MOD_PATH="$OUT/mods"         modules_install
+}
+
+show_outputs()
+{
+    if [ -f "$OUT/arch/arm/boot/zImage" ]; then
+        echo
+        echo "Kernel image:"
+        ls -lh "$OUT/arch/arm/boot/zImage"
+    fi
+
+    if [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+    fi
+
+    if [ -d "$OUT/mods/lib/modules/$EXPECTED_RELEASE" ]; then
+        echo "Relevant staged modules:"
+        find "$OUT/mods/lib/modules/$EXPECTED_RELEASE"             -type f             \( -name '*ads131a*.ko' -o -name '*atmel*ssc*.ko' -o -name '*atmel_ssc*.ko' \)             -print || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_fast
+        show_outputs
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    build)
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config" ||
         die "CONFIG_SND_ATMEL_SOC did not resolve to m"
 
     grep -q '^CONFIG_SND_ATMEL_SOC_SSC_DMA=m$' "$config" ||
