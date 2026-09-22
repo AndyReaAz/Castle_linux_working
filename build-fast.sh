@@ -134,15 +134,14 @@ configure_fast()
 
 build_fast()
 {
-    make_kernel -j"$JOBS"         zImage         microchip/nextgen.dtb         modules
+    make_kernel -j"$JOBS" \
+        zImage \
+        microchip/nextgen.dtb
 
     [ -f "$OUT/arch/arm/boot/zImage" ] ||
         die "zImage was not produced"
     [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
         die "nextgen.dtb was not produced"
-
-    rm -rf "$OUT/mods"
-    make_kernel         INSTALL_MOD_PATH="$OUT/mods"         modules_install
 }
 
 show_outputs()
@@ -158,11 +157,8 @@ show_outputs()
         ls -lh "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
     fi
 
-    if [ -d "$OUT/mods/lib/modules/$EXPECTED_RELEASE" ]; then
-        echo "Module tree:"
-        du -sh "$OUT/mods/lib/modules/$EXPECTED_RELEASE"
-        find "$OUT/mods/lib/modules/$EXPECTED_RELEASE" -type f -name '*.ko' | wc -l |             awk '{ print "  .ko files: " $1 }'
-    fi
+    module_count=$(grep -c '=m$' "$OUT/.config" || true)
+    echo "  modular config entries: $module_count"
 
     if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
         echo
