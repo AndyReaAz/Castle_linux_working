@@ -107,6 +107,14 @@ configure_deferred()
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
+    # The SAMA5D2 HLCDC driver is DRM/KMS-only in this kernel.  Preserve the
+    # existing application ABI by enabling DRM fbdev emulation, which creates
+    # /dev/fb0 once the HLCDC modeset driver registers.
+    "$cfg" --file "$config" -e DRM
+    "$cfg" --file "$config" -e DRM_FBDEV_EMULATION
+    "$cfg" --file "$config" -e DRM_ATMEL_HLCDC
+    "$cfg" --file "$config" -e DRM_PANEL_SIMPLE
+
     echo "Deferring non-boot-critical built-in drivers:"
 
     move_if_builtin MACB
