@@ -88,7 +88,7 @@ show_config()
 
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(ARCH_AT91|SOC_SAMA5D2|ATMEL_SSC|SND_ATMEL_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(ARCH_AT91|SOC_SAMA5D2|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|ATMEL_SSC|SND_ATMEL_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -119,7 +119,7 @@ configure_fast()
 
     # These are known-good NextGen requirements from workingconfig.  The
     # fast-boot baseline must not change their built-in status.
-    for sym in         ARCH_AT91         SOC_SAMA5D2         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
+    for sym in         ARCH_AT91         SOC_SAMA5D2         DRM         DRM_FBDEV_EMULATION         DRM_ATMEL_HLCDC         DRM_PANEL_SIMPLE         BACKLIGHT_CLASS_DEVICE         BACKLIGHT_PWM         PWM         PWM_ATMEL_HLCDC_PWM         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
     do
         grep -q "^CONFIG_${sym}=y$" "$config" ||
             die "CONFIG_${sym} did not remain built-in"
