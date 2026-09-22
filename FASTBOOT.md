@@ -74,6 +74,8 @@ WILC source, including its old Bluetooth implementation, is intentionally left
 unchanged because the longer-term direction is a newer Microchip WILC
 driver/kernel rather than maintaining a fork of the legacy vendor code.
 
+The known-good kernel also had the legacy PCMCIA-era MTD block translators enabled. In the captured baseline they account for roughly 0.37 s of boot time by scanning the first 1 MiB of each NOR/NAND partition for an FTL header, including about 0.27 s on the large NAND rootfs partition. The deferred profile disables `MTD_BLOCK`, `MTD_BLOCK_RO`, `FTL`, `NFTL`, `INFTL`, `RFD_FTL`, `SSFDC`, `SM_FTL` and `MTD_SWAP`. Raw `/dev/mtd*` update access and the future UBI/UBIFS root path do not use these translators.
+
 The deferred profile also disables `CONFIG_DEBUG_FS`. No product runtime path
 depends on debugfs; the previous unconditional `/sys/kernel/debug` mount has
 been removed from the Buildroot fast profile. This drops development-only
