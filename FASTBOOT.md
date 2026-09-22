@@ -64,8 +64,9 @@ The boot-critical and measurement paths are explicitly checked after
 - Goodix touch
 - SHT4x and LPS22HB pressure/temperature sensor paths
 - the complete Atmel SSC/ADS131A ALSA path
-- the USB gadget/Atmel UDC plus configfs ACM, NCM and FunctionFS support used
-  by the application's existing `USBDeviceRun()` path
+- the generic USB gadget core stays built in, but the concrete Atmel UDC,
+  configfs filesystem/composite layer and ACM/NCM/FunctionFS implementations
+  are deliberately deferred as modules
 
 Generic kernel Bluetooth is disabled with `CONFIG_BT=n`. The legacy vendor
 WILC source, including its old Bluetooth implementation, is intentionally left
@@ -77,6 +78,17 @@ WILC interface modules are blacklisted from eudev alias autoloading, then the
 application explicitly modprobes WILC at its existing delayed Wi-Fi stage
 before starting NetworkManager. Other deferred DT modules can still be loaded
 normally by eudev/kmod.
+
+USB gadget support follows the same on-demand policy. The deferred kernel uses
+`CONFIG_USB_ATMEL_USBA=m`, `CONFIG_USB_CONFIGFS=m` and modular configfs plus
+ACM/NCM/FunctionFS implementations. The Buildroot profile removes the
+unconditional configfs mount, prevents the Atmel UDC DT modalias from being
+autoloaded by eudev, and leaves normal `S50usb-gadget` startup empty. About two
+seconds after the main UI loop starts, the application runs `USBDeviceRun()`;
+a zero USB mask loads nothing, while a non-zero mask causes
+`usbcontrol.sh` to load only the required gadget modules, construct only the
+selected functions and bind the UDC once. Engineering mode retains the early
+NCM-only recovery path.
 
 The output is separate from the LZ4 control build:
 
