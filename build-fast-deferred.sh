@@ -190,6 +190,7 @@ configure_deferred()
     move_if_builtin MTD_SPI_NOR
 
     "$cfg" --file "$config" -e MTD
+    "$cfg" --file "$config" -e MTD_OF_PARTS
     "$cfg" --file "$config" -e MTD_UBI
     "$cfg" --file "$config" -e UBIFS_FS
     "$cfg" --file "$config" -d MTD_UBI_FASTMAP
@@ -253,7 +254,7 @@ configure_deferred()
         fi
     done
 
-    for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_UBI UBIFS_FS SPI SPI_ATMEL MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+    for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_OF_PARTS MTD_UBI UBIFS_FS SPI SPI_ATMEL MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
                TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
