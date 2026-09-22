@@ -177,6 +177,12 @@ build_deferred()
 
     rm -rf "$OUT/mods"
     make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$release_dir" ] || die "module install did not create $release_dir"
+
+    module_count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+    [ "$module_count" -gt 0 ] || die "deferred profile produced no kernel modules"
 }
 
 show_outputs()
