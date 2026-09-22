@@ -155,11 +155,22 @@ configure_deferred()
     move_if_builtin VIDEO_ATMEL_ISI
     move_if_builtin VIDEO_MICROCHIP_ISC
 
-    # Keep MTD/UBI core built in for the future NAND-root production path, but
-    # move the concrete SPI flash controller/media drivers out of zImage.
+    # Keep MTD/UBI core available for the future NAND-root production path,
+    # but move the concrete SPI flash controller/media drivers out of zImage
+    # on the current SD-root fast profile.
     move_if_builtin SPI_ATMEL_QUADSPI
     move_if_builtin MTD_SPI_NAND
     move_if_builtin MTD_SPI_NOR
+
+    # The known-good kernel enables several legacy MTD block translation
+    # layers. CONFIG_FTL is particularly expensive: it probes every MTD
+    # partition by reading up to the first 1 MiB looking for a PCMCIA FTL100
+    # header. NextGen uses raw /dev/mtd* access for flashing and the future
+    # NAND root is UBI/UBIFS, so none of these block translators are required.
+    for sym in MTD_BLOCK MTD_BLOCK_RO FTL NFTL INFTL RFD_FTL SSFDC SM_FTL MTD_SWAP
+    do
+        "$cfg" --file "$config" -d "$sym"
+    done
 
     # Root SD uses SAMA5D2 SDHCI, not the legacy Atmel MCI driver.
     move_if_builtin MMC_ATMELMCI
@@ -193,8 +204,124 @@ configure_deferred()
         die "CONFIG_KERNEL_LZ4 did not remain enabled"
     grep -q '^# CONFIG_BT is not set$' "$config" ||
         die "Bluetooth unexpectedly enabled"
-    grep -q '^# CONFIG_DEBUG_FS is not set$' "$config" ||
+    grep -q '^# CONFIG_DEBUG_FS is not set SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
+               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
+               TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
+               USB_CONFIGFS_ACM USB_CONFIGFS_NCM USB_CONFIGFS_F_FS \
+               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
+               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" ||
+            die "critical CONFIG_${sym} is no longer built-in"
+    done
+
+    while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        grep -q "^CONFIG_${sym}=m$" "$config" ||
+            die "requested deferred CONFIG_${sym} did not resolve to m"
+    done < "$EXPECTED_MODULES_FILE"
+
+    # USB_CONFIGFS remains the user-facing tristate while its selected
+    # function implementations are hidden symbols.  Verify that the latter
+    # follow the deferred module boundary rather than being pulled back into
+    # zImage by Kconfig.
+    for sym in USB_GADGET USB_ATMEL_USBA USB_CONFIGFS CONFIGFS_FS \
+               USB_LIBCOMPOSITE USB_U_SERIAL USB_F_ACM USB_U_ETHER USB_F_NCM USB_F_FS
+    do
+        grep -q "^CONFIG_${sym}=m$" "$config" ||
+            die "deferred gadget CONFIG_${sym} did not resolve to m"
+    done
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    echo
+    echo "NextGen deferred kernel output:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
+        sort -nr | head -30 || true
+
+    compare_zimages
+}
+
+compare_zimages()
+{
+    control="$ROOT/build-fast/arch/arm/boot/zImage"
+    deferred="$OUT/arch/arm/boot/zImage"
+
+    echo
+    echo "zImage size comparison:"
+    if [ ! -f "$control" ]; then
+        echo "  control:  not available ($control)"
+        echo "  deferred: $(wc -c < "$deferred" | tr -d '[:space:]') bytes"
+        echo "  Build the LZ4 control with build-fast.sh to calculate the delta."
+        return 0
+    fi
+
+    control_bytes="$(wc -c < "$control" | tr -d '[:space:]')"
+    deferred_bytes="$(wc -c < "$deferred" | tr -d '[:space:]')"
+    delta_bytes=$((control_bytes - deferred_bytes))
+
+    printf '  control:   %d bytes\n' "$control_bytes"
+    printf '  deferred:  %d bytes\n' "$deferred_bytes"
+
+    if [ "$delta_bytes" -ge 0 ]; then
+        permille=$((delta_bytes * 1000 / control_bytes))
+        printf '  reduction: %d bytes (%d.%d%%)\n' \
+            "$delta_bytes" "$((permille / 10))" "$((permille % 10))"
+    else
+        growth_bytes=$((-delta_bytes))
+        permille=$((growth_bytes * 1000 / control_bytes))
+        printf '  growth:    %d bytes (%d.%d%%)\n' \
+            "$growth_bytes" "$((permille / 10))" "$((permille % 10))"
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_deferred
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_deferred
+        build_deferred
+        ;;
+    build)
+        configure_deferred
+        build_deferred
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config" ||
         die "debugfs unexpectedly enabled"
+
+    for sym in MTD_BLOCK MTD_BLOCK_RO FTL NFTL INFTL RFD_FTL SSFDC SM_FTL MTD_SWAP
+    do
+        grep -q "^# CONFIG_${sym} is not set$" "$config" ||
+            die "legacy MTD translator CONFIG_${sym} unexpectedly enabled"
+    done
 
     for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
