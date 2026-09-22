@@ -107,6 +107,14 @@ configure_fast()
         "$cfg" --file "$config" -d "$sym"
     done
 
+    # The current NextGen DT uses the SAMA5D2 HLCDC DRM/KMS driver.  Keep
+    # userspace on the existing /dev/fb0 interface via DRM fbdev emulation;
+    # no userspace DRM conversion is required.
+    "$cfg" --file "$config" -e DRM
+    "$cfg" --file "$config" -e DRM_FBDEV_EMULATION
+    "$cfg" --file "$config" -e DRM_ATMEL_HLCDC
+    "$cfg" --file "$config" -e DRM_PANEL_SIMPLE
+
     # Keep the deployed kernel/module release directory stable despite the
     # snapshot-style Git history used by the working mirror.
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
