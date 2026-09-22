@@ -73,6 +73,12 @@ WILC source, including its old Bluetooth implementation, is intentionally left
 unchanged because the longer-term direction is a newer Microchip WILC
 driver/kernel rather than maintaining a fork of the legacy vendor code.
 
+The deferred profile also disables `CONFIG_DEBUG_FS`. No product runtime path
+depends on debugfs; the previous unconditional `/sys/kernel/debug` mount has
+been removed from the Buildroot fast profile. This drops development-only
+debug hooks from several subsystems. Use the control kernel when those
+diagnostics are required.
+
 WILC Wi-Fi is application-on-demand in the deferred Buildroot profile. The
 WILC interface modules are blacklisted from eudev alias autoloading, then the
 application explicitly modprobes WILC at its existing delayed Wi-Fi stage
