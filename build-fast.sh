@@ -18,7 +18,6 @@ die()
 }
 
 [ -x "$ROOT/scripts/config" ] || die "scripts/config not found in $ROOT"
-
 command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1 ||
     die "ARM compiler not found: ${TOOLCHAIN_PREFIX}gcc"
 
@@ -62,14 +61,14 @@ seed_config()
             cp "$ROOT/.config" "$OUT/.config"
             echo "Seeded fast-boot config from $ROOT/.config"
         else
-            die "no base config; set KERNEL_BASE_CONFIG=/path/to/.config"
+            die "no base config; set KERNEL_BASE_CONFIG=/path/to/known-good/config"
         fi
     fi
 
     grep -q '^CONFIG_ARCH_AT91=y$' "$OUT/.config" ||
-        die "base config is not an AT91 kernel (CONFIG_ARCH_AT91=y missing)"
+        die "base config is not AT91"
     grep -q '^CONFIG_SOC_SAMA5D2=y$' "$OUT/.config" ||
-        die "base config is not SAMA5D2 (CONFIG_SOC_SAMA5D2=y missing)"
+        die "base config is not SAMA5D2"
 }
 
 make_kernel()
@@ -89,7 +88,7 @@ show_config()
 
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(ATMEL_SSC|SND_ATMEL_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(ARCH_AT91|SOC_SAMA5D2|ATMEL_SSC|SND_ATMEL_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -100,44 +99,31 @@ configure_fast()
     cfg="$ROOT/scripts/config"
     config="$OUT/.config"
 
-    # Stage 1 boot baseline: use LZ4 for the self-decompressing zImage.
+    # Stage 1 fast-boot baseline: compression only.
+    # Preserve the known-good NextGen hardware/driver configuration.
     "$cfg" --file "$config" -e KERNEL_LZ4
     for sym in         KERNEL_GZIP         KERNEL_BZIP2         KERNEL_LZMA         KERNEL_XZ         KERNEL_LZO         KERNEL_ZSTD         KERNEL_UNCOMPRESSED
     do
         "$cfg" --file "$config" -d "$sym"
     done
 
-    # Keep module support enabled and request the SSC/ADS131A capture stack
-    # as modules.
-    "$cfg" --file "$config" -e MODULES
-    "$cfg" --file "$config" -m ATMEL_SSC
-    "$cfg" --file "$config" -m SND_ATMEL_SOC
-    "$cfg" --file "$config" -m SND_ATMEL_SOC_SSC_DMA
-    "$cfg" --file "$config" -m TI_ADS131A
-    "$cfg" --file "$config" -m SND_AUDIO_GRAPH_CARD2
-
-    # Keep the deployed /lib/modules release directory stable.
+    # Keep the deployed kernel/module release directory stable despite the
+    # snapshot-style Git history used by the working mirror.
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
     make_kernel olddefconfig
 
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES did not resolve to y"
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
         die "CONFIG_KERNEL_LZ4 did not resolve to y"
-    grep -q '^CONFIG_ATMEL_SSC=m$' "$config" ||
-        die "CONFIG_ATMEL_SSC did not resolve to m"
-    grep -q '^CONFIG_SND_ATMEL_SOC=m$' "$config" ||
-        die "CONFIG_SND_ATMEL_SOC did not resolve to m"
-    grep -q '^CONFIG_SND_ATMEL_SOC_SSC_DMA=m$' "$config" ||
-        die "CONFIG_SND_ATMEL_SOC_SSC_DMA did not resolve to m"
-    grep -q '^CONFIG_SND_ATMEL_SOC_SSC=m$' "$config" ||
-        die "CONFIG_SND_ATMEL_SOC_SSC did not resolve to m"
-    grep -q '^CONFIG_TI_ADS131A=m$' "$config" ||
-        die "CONFIG_TI_ADS131A did not resolve to m"
-    grep -q '^CONFIG_SND_AUDIO_GRAPH_CARD2=m$' "$config" ||
-        die "CONFIG_SND_AUDIO_GRAPH_CARD2 did not resolve to m"
+
+    # These are known-good NextGen requirements from workingconfig.  The
+    # fast-boot baseline must not change their built-in status.
+    for sym in         ARCH_AT91         SOC_SAMA5D2         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" ||
+            die "CONFIG_${sym} did not remain built-in"
+    done
 
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
     [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
@@ -173,8 +159,9 @@ show_outputs()
     fi
 
     if [ -d "$OUT/mods/lib/modules/$EXPECTED_RELEASE" ]; then
-        echo "Relevant staged modules:"
-        find "$OUT/mods/lib/modules/$EXPECTED_RELEASE"             -type f             \( -name '*ads131a*.ko' -o -name '*atmel*ssc*.ko' -o -name '*atmel_ssc*.ko' -o -name '*audio-graph-card2*.ko' \)             -print || true
+        echo "Module tree:"
+        du -sh "$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+        find "$OUT/mods/lib/modules/$EXPECTED_RELEASE" -type f -name '*.ko' | wc -l |             awk '{ print "  .ko files: " $1 }'
     fi
 
     if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
