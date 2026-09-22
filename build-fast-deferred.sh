@@ -112,9 +112,6 @@ configure_deferred()
     move_if_builtin MTD_SPI_NAND
     move_if_builtin MTD_SPI_NOR
     move_if_builtin APDS9300
-    move_if_builtin SENSORS_SHT4x
-    move_if_builtin IIO_ST_PRESS
-    move_if_builtin IIO_ST_PRESS_I2C
     move_if_builtin INPUT_DRV260X_HAPTICS
     move_if_builtin KXCJK1013
 
