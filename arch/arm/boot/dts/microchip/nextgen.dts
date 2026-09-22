@@ -30,7 +30,7 @@
 	};
 	
 	chosen {
-		stdout-path = "serial0:921600n8";
+		stdout-path = "serial0:576000n8";
 	};
 	
 	wifi_pwrseq: wifi-pwrseq {
