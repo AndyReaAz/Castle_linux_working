@@ -16,16 +16,18 @@ Run:
 ./build-fast.sh
 ```
 
-Seed the build from the actual known-good meter kernel configuration
-(`workingconfig` in the original NextGen kernel workspace), not an arbitrary
-or stale checkout `.config`:
+Seed the build from the configuration extracted from the deployed known-good
+kernel image. That embedded config is the authoritative baseline:
 
 ```sh
-KERNEL_BASE_CONFIG=/path/to/workingconfig ./build-fast.sh
+./scripts/extract-ikconfig /path/to/known-good/zImage > /tmp/nextgen-known-good.config
+KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast.sh
 ```
 
-The build scripts deliberately refuse a base configuration that does not
-already contain the proven HLCDC DRM/fbdev display stack.
+The saved `workingconfig` and checkout `.config` are not authoritative for
+this recovery because they do not match the deployed kernel's display options.
+The build scripts refuse a base config that lacks the deployed HLCDC DRM/fbdev
+stack.
 
 The script uses `arm-linux-gnueabihf-` from `PATH` by default and uses
 `ccache` automatically when available. It has no Buildroot dependency.
@@ -56,8 +58,8 @@ Goodix touch, USB, and the complete Atmel SSC/ADS131A audio path built-in.
 The output is separate from the control build:
 
 ```sh
-KERNEL_BASE_CONFIG=/path/to/workingconfig ./build-fast-deferred.sh config
-KERNEL_BASE_CONFIG=/path/to/workingconfig ./build-fast-deferred.sh build
+KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast-deferred.sh config
+KERNEL_BASE_CONFIG=/tmp/nextgen-known-good.config ./build-fast-deferred.sh build
 ```
 
 Artifacts are placed in `build-fast-deferred/`. The script prints the zImage
@@ -75,13 +77,17 @@ The NextGen ST7789 is initialised into RGB666 mode by U-Boot. Linux does not
 reconfigure the panel over SPI. Linux does, however, own the SAMA5D27 HLCDC
 once the kernel starts.
 
-The current kernel DT describes the HLCDC output using the DRM/KMS display
-graph, so the fast-boot kernel must keep these built in:
+The deployed known-good kernel image confirms the Linux display path uses the
+HLCDC DRM/KMS driver with fbdev emulation. The fast-boot kernel must keep these
+built in:
 
 - `CONFIG_DRM=y`
 - `CONFIG_DRM_FBDEV_EMULATION=y`
 - `CONFIG_DRM_ATMEL_HLCDC=y`
 - `CONFIG_DRM_PANEL_SIMPLE=y`
+- `CONFIG_MFD_ATMEL_HLCDC=y`
+- `CONFIG_FB=y`
+- `CONFIG_FB_SIMPLE=y`
 
 DRM is kernel-side plumbing here. `DRM_FBDEV_EMULATION` keeps the existing
 userspace ABI by creating `/dev/fb0`; the NextGen application does not need
