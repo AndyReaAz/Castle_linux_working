@@ -111,6 +111,7 @@ configure_deferred()
 
     move_if_builtin MACB
     move_if_builtin WILC_SPI
+    move_if_builtin WILC_SDIO
 
     move_if_builtin SPI_ATMEL_QUADSPI
     move_if_builtin MTD_SPI_NAND
@@ -152,6 +153,309 @@ configure_deferred()
         grep -q "^CONFIG_${sym}=m$" "$config" ||
             die "requested deferred CONFIG_${sym} did not resolve to m"
     done < "$EXPECTED_MODULES_FILE"
+
+    if grep -q '^CONFIG_WILC_SPI=m
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
+
+    echo
+    echo "Resolved deferred modules:"
+    if [ -s "$EXPECTED_MODULES_FILE" ]; then
+        while IFS= read -r sym; do
+            grep "^CONFIG_${sym}=m$" "$config"
+        done < "$EXPECTED_MODULES_FILE"
+    else
+        echo "  none of the candidate drivers were built-in in the base config"
+    fi
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$release_dir" ] || die "module install did not create $release_dir"
+
+    module_count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+    [ "$module_count" -gt 0 ] || die "deferred profile produced no kernel modules"
+}
+
+show_outputs()
+{
+    image="$OUT/arch/arm/boot/zImage"
+    dtb="$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+
+    if [ -f "$image" ]; then
+        echo
+        echo "Deferred kernel image:"
+        ls -lh "$image"
+
+        if [ -f "$BASE_OUT/arch/arm/boot/zImage" ]; then
+            base_bytes=$(stat -c '%s' "$BASE_OUT/arch/arm/boot/zImage")
+            deferred_bytes=$(stat -c '%s' "$image")
+            saved_bytes=$((base_bytes - deferred_bytes))
+            awk -v base="$base_bytes" -v now="$deferred_bytes" -v saved="$saved_bytes" 'BEGIN {
+                printf "  baseline: %.2f MiB\n", base / 1048576
+                printf "  deferred: %.2f MiB\n", now / 1048576
+                printf "  saved:    %.2f MiB (%.1f%%)\n", saved / 1048576, (saved * 100.0) / base
+            }'
+        fi
+    fi
+
+    if [ -f "$dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$dtb"
+    fi
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    if [ -d "$release_dir" ]; then
+        echo "Module tree:"
+        du -sh "$release_dir"
+        count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+        echo "  .ko files: $count"
+        echo "Deferred-driver modules:"
+        find "$release_dir" -type f -name '*.ko' | grep -E 'wilc|macb|atmel-quadspi|spinand|spi-nor|apds9300|sht4x|st_pressure|drv260x|kxcjk' || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_deferred
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    build)
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config" ||
+       grep -q '^CONFIG_WILC_SDIO=m
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
+
+    echo
+    echo "Resolved deferred modules:"
+    if [ -s "$EXPECTED_MODULES_FILE" ]; then
+        while IFS= read -r sym; do
+            grep "^CONFIG_${sym}=m$" "$config"
+        done < "$EXPECTED_MODULES_FILE"
+    else
+        echo "  none of the candidate drivers were built-in in the base config"
+    fi
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$release_dir" ] || die "module install did not create $release_dir"
+
+    module_count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+    [ "$module_count" -gt 0 ] || die "deferred profile produced no kernel modules"
+}
+
+show_outputs()
+{
+    image="$OUT/arch/arm/boot/zImage"
+    dtb="$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+
+    if [ -f "$image" ]; then
+        echo
+        echo "Deferred kernel image:"
+        ls -lh "$image"
+
+        if [ -f "$BASE_OUT/arch/arm/boot/zImage" ]; then
+            base_bytes=$(stat -c '%s' "$BASE_OUT/arch/arm/boot/zImage")
+            deferred_bytes=$(stat -c '%s' "$image")
+            saved_bytes=$((base_bytes - deferred_bytes))
+            awk -v base="$base_bytes" -v now="$deferred_bytes" -v saved="$saved_bytes" 'BEGIN {
+                printf "  baseline: %.2f MiB\n", base / 1048576
+                printf "  deferred: %.2f MiB\n", now / 1048576
+                printf "  saved:    %.2f MiB (%.1f%%)\n", saved / 1048576, (saved * 100.0) / base
+            }'
+        fi
+    fi
+
+    if [ -f "$dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$dtb"
+    fi
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    if [ -d "$release_dir" ]; then
+        echo "Module tree:"
+        du -sh "$release_dir"
+        count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+        echo "  .ko files: $count"
+        echo "Deferred-driver modules:"
+        find "$release_dir" -type f -name '*.ko' | grep -E 'wilc|macb|atmel-quadspi|spinand|spi-nor|apds9300|sht4x|st_pressure|drv260x|kxcjk' || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_deferred
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    build)
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config"; then
+        grep -q '^CONFIG_WILC=m
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
+
+    echo
+    echo "Resolved deferred modules:"
+    if [ -s "$EXPECTED_MODULES_FILE" ]; then
+        while IFS= read -r sym; do
+            grep "^CONFIG_${sym}=m$" "$config"
+        done < "$EXPECTED_MODULES_FILE"
+    else
+        echo "  none of the candidate drivers were built-in in the base config"
+    fi
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$release_dir" ] || die "module install did not create $release_dir"
+
+    module_count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+    [ "$module_count" -gt 0 ] || die "deferred profile produced no kernel modules"
+}
+
+show_outputs()
+{
+    image="$OUT/arch/arm/boot/zImage"
+    dtb="$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+
+    if [ -f "$image" ]; then
+        echo
+        echo "Deferred kernel image:"
+        ls -lh "$image"
+
+        if [ -f "$BASE_OUT/arch/arm/boot/zImage" ]; then
+            base_bytes=$(stat -c '%s' "$BASE_OUT/arch/arm/boot/zImage")
+            deferred_bytes=$(stat -c '%s' "$image")
+            saved_bytes=$((base_bytes - deferred_bytes))
+            awk -v base="$base_bytes" -v now="$deferred_bytes" -v saved="$saved_bytes" 'BEGIN {
+                printf "  baseline: %.2f MiB\n", base / 1048576
+                printf "  deferred: %.2f MiB\n", now / 1048576
+                printf "  saved:    %.2f MiB (%.1f%%)\n", saved / 1048576, (saved * 100.0) / base
+            }'
+        fi
+    fi
+
+    if [ -f "$dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$dtb"
+    fi
+
+    release_dir="$OUT/mods/lib/modules/$EXPECTED_RELEASE"
+    if [ -d "$release_dir" ]; then
+        echo "Module tree:"
+        du -sh "$release_dir"
+        count=$(find "$release_dir" -type f -name '*.ko' | wc -l)
+        echo "  .ko files: $count"
+        echo "Deferred-driver modules:"
+        find "$release_dir" -type f -name '*.ko' | grep -E 'wilc|macb|atmel-quadspi|spinand|spi-nor|apds9300|sht4x|st_pressure|drv260x|kxcjk' || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_deferred
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    build)
+        configure_deferred
+        build_deferred
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$config" ||
+            die "WILC common core did not resolve to m"
+    fi
 
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
     [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
