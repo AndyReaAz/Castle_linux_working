@@ -20,6 +20,52 @@
 
 #include "netdev.h"
 
+
+#if !IS_ENABLED(CONFIG_WILC_BT)
+
+/*
+ * WILC Wi-Fi-only build.
+ *
+ * The vendor driver historically placed shared Wi-Fi/BT power ownership in
+ * bt.c.  Keep the Wi-Fi bookkeeping needed by wilc_mac_open(), but omit the
+ * Bluetooth character device, firmware loader and coexistence control path.
+ */
+int wilc_bt_power_up(struct wilc *wilc, int source)
+{
+	if (source != DEV_WIFI)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&wilc->cs);
+	if (!wilc->power.status[DEV_WIFI])
+		pr_info("WILC POWER UP\n");
+	wilc->power.status[DEV_WIFI] = true;
+	mutex_unlock(&wilc->cs);
+
+	return 0;
+}
+
+int wilc_bt_power_down(struct wilc *wilc, int source)
+{
+	if (source != DEV_WIFI)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&wilc->cs);
+	wilc->power.status[DEV_WIFI] = false;
+	mutex_unlock(&wilc->cs);
+
+	return 0;
+}
+
+void wilc_bt_init(struct wilc *wilc)
+{
+}
+
+void wilc_bt_deinit(void)
+{
+}
+
+#else /* CONFIG_WILC_BT */
+
 static struct wilc *wilc_bt;
 static dev_t chc_dev_no; /* Global variable for the first device number */
 static struct cdev str_chc_dev; /* Global variable for the character */
@@ -698,3 +744,5 @@ void wilc_bt_deinit(void)
 	unregister_chrdev_region(chc_dev_no, 1);
 	pr_info("at_pwr_dev: unregistered\n");
 }
+
+#endif /* CONFIG_WILC_BT */
