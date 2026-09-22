@@ -112,6 +112,12 @@ configure_deferred()
         die "SPI NAND rootfs partition is not 128 MiB"
     grep -q 'spi-max-frequency = <90000000>;' "$dts" ||
         die "SPI NAND QSPI frequency request changed"
+    grep -q 'compatible = "spi-nand";' "$dts" ||
+        die "SPI NAND compatible string is not the kernel binding"
+    grep -q 'spi-rx-bus-width = <4>;' "$dts" ||
+        die "SPI NAND quad-read bus width is missing"
+    grep -q 'spi-tx-bus-width = <1>;' "$dts" ||
+        die "SPI NAND single-bit write bus width changed"
 
     cfg="$ROOT/scripts/config"
     config="$OUT/.config"
@@ -247,7 +253,7 @@ configure_deferred()
         fi
     done
 
-    for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_UBI UBIFS_FS MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+    for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_UBI UBIFS_FS SPI SPI_ATMEL MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
                TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
