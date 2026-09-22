@@ -63,3 +63,26 @@ under `build-fast-deferred/mods/lib/modules/<release>/`.
 The matching Buildroot fast branch packages the complete module tree when one
 exists. eudev module loading and kmod tools are enabled so DT modaliases can
 load deferred drivers after userspace starts.
+
+
+## Display ownership
+
+The NextGen ST7789 is initialised into RGB666 mode by U-Boot. Linux does not
+reconfigure the panel over SPI. Linux does, however, own the SAMA5D27 HLCDC
+once the kernel starts.
+
+The current kernel DT describes the HLCDC output using the DRM/KMS display
+graph, so the fast-boot kernel must keep these built in:
+
+- `CONFIG_DRM=y`
+- `CONFIG_DRM_FBDEV_EMULATION=y`
+- `CONFIG_DRM_ATMEL_HLCDC=y`
+- `CONFIG_DRM_PANEL_SIMPLE=y`
+
+DRM is kernel-side plumbing here. `DRM_FBDEV_EMULATION` keeps the existing
+userspace ABI by creating `/dev/fb0`; the NextGen application does not need
+to use DRM userspace APIs.
+
+The HLCDC PWM/backlight path must also remain built-in. If PWM probes while
+the DRM display stack is absent, Linux can change the inherited U-Boot
+backlight state without ever creating `/dev/fb0`, leaving the display dark.
