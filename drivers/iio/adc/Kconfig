@@ -1327,11 +1327,14 @@ config TI_ADS124S08
 	  called ti-ads124s08.
 
 config TI_ADS131A
-    tristate "ADS131A driver"
-    depends on SND_SOC
-    depends on SPI
-    help
-      Driver for custom ADC codec.
+	tristate "ADS131A driver"
+	depends on SND_SOC
+	depends on SND_ATMEL_SOC_SSC
+	depends on SPI
+	help
+	  Driver for the NextGen ADS131A capture path.  This driver calls
+	  helper functions provided by the Atmel SSC ASoC DAI, so its
+	  built-in/module state must not exceed SND_ATMEL_SOC_SSC.
 
 config TI_ADS131E08
 	tristate "Texas Instruments ADS131E08"
