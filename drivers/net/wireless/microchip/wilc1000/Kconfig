@@ -2,15 +2,6 @@
 config WILC
 	tristate
 
-config WILC_BT
-	bool "WILC3000 Bluetooth control interface"
-	depends on WILC
-	default y
-	help
-	  Build the vendor WILC3000 Bluetooth character-device and firmware
-	  control path (/dev/wilc_bt). Wi-Fi operation does not require this.
-	  Disable it on products which use WILC only for 802.11.
-
 config WILC_SDIO
 	tristate "WILC SDIO"
 	depends on CFG80211 && INET && MMC
