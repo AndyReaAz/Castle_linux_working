@@ -140,6 +140,9 @@ configure_deferred()
         DRM_FBDEV_EMULATION \
         DRM_ATMEL_HLCDC \
         DRM_PANEL_SIMPLE \
+        MFD_ATMEL_HLCDC \
+        FB \
+        FB_SIMPLE \
         BACKLIGHT_CLASS_DEVICE \
         BACKLIGHT_PWM \
         PWM \
@@ -269,13 +272,12 @@ case "${1:-build}" in
 esac
  "$OUT/.config" || die "base config has no module support"
 
-    # Do not invent or alter the display architecture in a boot-time profile.
-    # Require the exact proven kernel-side HLCDC -> fbdev handoff up front.
     for sym in DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
+               MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM
     do
         grep -q "^CONFIG_${sym}=y$" "$OUT/.config" ||
-            die "base config is not the known-good display configuration: CONFIG_${sym} is not y"
+            die "base config is not the deployed known-good display config: CONFIG_${sym} is not y"
     done
 }
 
