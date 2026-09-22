@@ -106,20 +106,19 @@ configure_deferred()
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
     # Bluetooth is intentionally absent from the current NextGen product.
-    # Disable both the generic Linux Bluetooth stack and the WILC3000 vendor
-    # /dev/wilc_bt firmware/control path while retaining Wi-Fi.
+    # Disable the generic Linux Bluetooth stack and the vendor WILC3000
+    # /dev/wilc_bt firmware/control path while retaining WILC Wi-Fi.
     "$cfg" --file "$config" -d BT
     "$cfg" --file "$config" -d WILC_BT
 
-    # Network devices not needed for rootfs, display or measurement startup.
+    # Network devices not required to mount rootfs, initialise display or
+    # start the measurement path.
     move_if_builtin MACB
     move_if_builtin WILC_SPI
     move_if_builtin WILC_SDIO
 
-    # USB device/gadget support is deliberately left alone because the
-    # application starts USBDeviceRun() during normal startup.  These are host
-    # side/class drivers only and can be loaded if an engineering peripheral
-    # actually needs them.
+    # USB gadget/UDC support stays built in because USBDeviceRun() is part of
+    # application startup. These are host/class drivers only.
     move_if_builtin SND_USB_AUDIO
     move_if_builtin USB_ACM
     move_if_builtin USB_SERIAL_FTDI_SIO
@@ -139,18 +138,16 @@ configure_deferred()
     move_if_builtin VIDEO_ATMEL_ISI
     move_if_builtin VIDEO_MICROCHIP_ISC
 
-    # Boot/storage flash is not needed to mount the current SD rootfs.
-    # Keep the MTD/UBI core built in for the future production NAND-root path,
-    # but move the concrete SPI flash controller/media drivers out.
+    # Keep MTD/UBI core built in for the future NAND-root production path, but
+    # move the concrete SPI flash controller/media drivers out of zImage.
     move_if_builtin SPI_ATMEL_QUADSPI
     move_if_builtin MTD_SPI_NAND
     move_if_builtin MTD_SPI_NOR
 
-    # The old Atmel MCI block is not the SD root controller; NextGen root uses
-    # the SAMA5D2 SDHCI controller, which remains built in and is verified below.
+    # Root SD uses SAMA5D2 SDHCI, not the legacy Atmel MCI driver.
     move_if_builtin MMC_ATMELMCI
 
-    # Unused SoC peripherals.  The ADS131A measurement path remains built in.
+    # Unused SoC peripherals. ADS131A/SSC measurement remains built in.
     move_if_builtin AT91_ADC
     move_if_builtin AT91_SAMA5D2_ADC
     move_if_builtin CRYPTO_DEV_ATMEL_AES
@@ -160,141 +157,18 @@ configure_deferred()
     move_if_builtin PWM_ATMEL
     move_if_builtin PWM_ATMEL_TCB
 
-    # Application-owned / absent I2C clients.
+    # Application-owned or absent I2C clients.
     move_if_builtin APDS9300
     move_if_builtin INPUT_DRV260X_HAPTICS
     move_if_builtin KXCJK1013
 
     make_kernel olddefconfig
 
-    grep -q '^CONFIG_KERNEL_LZ4=y    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
-               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
-               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
-               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
-    done
-
-    while IFS= read -r sym; do
-        [ -n "$sym" ] || continue
-        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
-    done < "$EXPECTED_MODULES_FILE"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
-}
-
-build_deferred()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-
-    rm -rf "$OUT/mods"
-    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
-
-    echo
-    echo "NextGen deferred kernel output:"
-    ls -lh "$OUT/arch/arm/boot/zImage"
-    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
-        sort -nr | head -30 || true
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_deferred ;;
-    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
-    build) configure_deferred; build_deferred ;;
-    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_KERNEL_LZ4 did not remain enabled"
-
-    grep -q '^# CONFIG_BT is not set    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
-               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
-               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
-               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
-    done
-
-    while IFS= read -r sym; do
-        [ -n "$sym" ] || continue
-        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
-    done < "$EXPECTED_MODULES_FILE"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
-}
-
-build_deferred()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-
-    rm -rf "$OUT/mods"
-    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
-
-    echo
-    echo "NextGen deferred kernel output:"
-    ls -lh "$OUT/arch/arm/boot/zImage"
-    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
-        sort -nr | head -30 || true
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_deferred ;;
-    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
-    build) configure_deferred; build_deferred ;;
-    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
+    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
+        die "CONFIG_KERNEL_LZ4 did not remain enabled"
+    grep -q '^# CONFIG_BT is not set$' "$config" ||
         die "Bluetooth unexpectedly enabled"
-    grep -q '^# CONFIG_WILC_BT is not set    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
-               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
-               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
-               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
-    done
-
-    while IFS= read -r sym; do
-        [ -n "$sym" ] || continue
-        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
-    done < "$EXPECTED_MODULES_FILE"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
-}
-
-build_deferred()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-
-    rm -rf "$OUT/mods"
-    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
-
-    echo
-    echo "NextGen deferred kernel output:"
-    ls -lh "$OUT/arch/arm/boot/zImage"
-    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
-        sort -nr | head -30 || true
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_deferred ;;
-    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
-    build) configure_deferred; build_deferred ;;
-    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
+    grep -q '^# CONFIG_WILC_BT is not set$' "$config" ||
         die "WILC Bluetooth control path unexpectedly enabled"
 
     for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
@@ -303,23 +177,29 @@ esac
                ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
                SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
     do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
+        grep -q "^CONFIG_${sym}=y$" "$config" ||
+            die "critical CONFIG_${sym} is no longer built-in"
     done
 
     while IFS= read -r sym; do
         [ -n "$sym" ] || continue
-        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
+        grep -q "^CONFIG_${sym}=m$" "$config" ||
+            die "requested deferred CONFIG_${sym} did not resolve to m"
     done < "$EXPECTED_MODULES_FILE"
 
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
 }
 
 build_deferred()
 {
     make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
 
     rm -rf "$OUT/mods"
     make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
@@ -332,9 +212,24 @@ build_deferred()
 }
 
 case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_deferred ;;
-    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
-    build) configure_deferred; build_deferred ;;
-    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_deferred
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_deferred
+        build_deferred
+        ;;
+    build)
+        configure_deferred
+        build_deferred
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
 esac
