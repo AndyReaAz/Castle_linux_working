@@ -16,12 +16,16 @@ Run:
 ./build-fast.sh
 ```
 
-If this checkout does not yet have a `.config`, seed it once from the current
-known-good meter kernel configuration:
+Seed the build from the actual known-good meter kernel configuration
+(`workingconfig` in the original NextGen kernel workspace), not an arbitrary
+or stale checkout `.config`:
 
 ```sh
-KERNEL_BASE_CONFIG=/path/to/linux-at91/.config ./build-fast.sh
+KERNEL_BASE_CONFIG=/path/to/workingconfig ./build-fast.sh
 ```
+
+The build scripts deliberately refuse a base configuration that does not
+already contain the proven HLCDC DRM/fbdev display stack.
 
 The script uses `arm-linux-gnueabihf-` from `PATH` by default and uses
 `ccache` automatically when available. It has no Buildroot dependency.
