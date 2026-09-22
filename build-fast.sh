@@ -115,9 +115,9 @@ configure_fast()
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
         die "CONFIG_KERNEL_LZ4 did not resolve to y"
 
-    # These are known-good NextGen requirements from workingconfig.  The
-    # fast-boot baseline must not change their built-in status.
-    for sym in         ARCH_AT91         SOC_SAMA5D2         DRM         DRM_FBDEV_EMULATION         DRM_ATMEL_HLCDC         DRM_PANEL_SIMPLE         BACKLIGHT_CLASS_DEVICE         BACKLIGHT_PWM         PWM         PWM_ATMEL_HLCDC_PWM         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
+    # These are deployed known-good NextGen requirements. The fast-boot
+    # baseline must not change their built-in status.
+    for sym in         ARCH_AT91         SOC_SAMA5D2         DRM         DRM_FBDEV_EMULATION         DRM_ATMEL_HLCDC         DRM_PANEL_SIMPLE         MFD_ATMEL_HLCDC         FB         FB_SIMPLE         BACKLIGHT_CLASS_DEVICE         BACKLIGHT_PWM         PWM         PWM_ATMEL_HLCDC_PWM         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
     do
         grep -q "^CONFIG_${sym}=y$" "$config" ||
             die "CONFIG_${sym} did not remain built-in"
@@ -192,13 +192,12 @@ esac
  "$OUT/.config" ||
         die "base config is not SAMA5D2"
 
-    # Fast-boot must start from the proven meter configuration, not construct
-    # a new display stack. Reject stale/incorrect configs immediately.
     for sym in DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
+               MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM
     do
         grep -q "^CONFIG_${sym}=y$" "$OUT/.config" ||
-            die "base config is not the known-good display configuration: CONFIG_${sym} is not y"
+            die "base config is not the deployed known-good display config: CONFIG_${sym} is not y"
     done
 }
 
