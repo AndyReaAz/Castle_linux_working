@@ -81,7 +81,7 @@ move_if_builtin()
 {
     sym="$1"
     if grep -q "^CONFIG_${sym}=y$" "$OUT/.config"; then
-        "$ROOT/scripts/config" --file "$OUT/.config" -m "$sym"
+        "$ROOT/scripts/config" --file "$OUT/.config" --keep-case -m "$sym"
         printf '%s\n' "$sym" >> "$EXPECTED_MODULES_FILE"
         printf '  defer %-28s y -> m\n' "$sym"
     else
