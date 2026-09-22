@@ -233,8 +233,10 @@ configure_deferred()
 
     for sym in MTD_BLOCK MTD_BLOCK_RO FTL NFTL INFTL RFD_FTL SSFDC SM_FTL MTD_SWAP
     do
-        grep -q "^# CONFIG_${sym} is not set$" "$config" ||
+        if grep -Eq "^CONFIG_${sym}=[ym]$" "$config"; then
+            grep "^CONFIG_${sym}=" "$config" >&2 || true
             die "legacy MTD translator CONFIG_${sym} unexpectedly enabled"
+        fi
     done
 
     for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_UBI UBIFS_FS MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
