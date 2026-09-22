@@ -26,5 +26,6 @@ KERNEL_BASE_CONFIG=/path/to/linux-at91/.config ./build-fast.sh
 The script uses `arm-linux-gnueabihf-` from `PATH` by default and uses
 `ccache` automatically when available. It has no Buildroot dependency.
 
-No DTS nodes or device drivers are removed in stage 1. Probe deferral/removal
-comes only after this baseline has been built and timed.
+No DTS nodes or device drivers are removed in stage 1. Display/video is also
+left completely unchanged for this baseline. Probe deferral/removal and display
+ownership changes come only after this baseline has been built and timed.
