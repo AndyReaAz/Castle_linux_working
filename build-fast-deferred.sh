@@ -125,11 +125,12 @@ configure_deferred()
     move_if_builtin WILC_SPI
     move_if_builtin WILC_SDIO
 
-    # USB gadget setup is no longer part of the boot-critical path. Keep the
-    # generic gadget framework available, but defer the concrete Atmel UDC,
-    # configfs composite layer and configfs filesystem until usbcontrol.sh
-    # selects a non-zero runtime mask.  The Buildroot deferred profile
-    # blacklists the UDC modalias so eudev does not defeat this deferral.
+    # USB gadget setup is no longer part of the boot-critical path. Defer the
+    # gadget core itself as well as the concrete Atmel UDC, configfs composite
+    # layer and configfs filesystem until usbcontrol.sh selects a non-zero
+    # runtime mask. The Buildroot deferred profile blacklists the UDC modalias
+    # so eudev does not defeat this deferral.
+    move_if_builtin USB_GADGET
     move_if_builtin USB_ATMEL_USBA
     move_if_builtin USB_CONFIGFS
     move_if_builtin CONFIGFS_FS
@@ -163,6 +164,14 @@ configure_deferred()
     # Root SD uses SAMA5D2 SDHCI, not the legacy Atmel MCI driver.
     move_if_builtin MMC_ATMELMCI
 
+    # /boot is no longer mounted by mount -a. It is mounted on demand only
+    # when the application accesses the U-Boot environment, so the VFAT stack
+    # and its actual mount character sets are not boot-critical.
+    move_if_builtin VFAT_FS
+    move_if_builtin FAT_FS
+    move_if_builtin NLS_CODEPAGE_437
+    move_if_builtin NLS_ISO8859_1
+
     # Unused SoC peripherals. ADS131A/SSC measurement remains built in.
     move_if_builtin AT91_ADC
     move_if_builtin AT91_SAMA5D2_ADC
@@ -191,7 +200,7 @@ configure_deferred()
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
                TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
-               USB_GADGET USB_CONFIGFS_ACM USB_CONFIGFS_NCM USB_CONFIGFS_F_FS \
+               USB_CONFIGFS_ACM USB_CONFIGFS_NCM USB_CONFIGFS_F_FS \
                ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
                SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
     do
@@ -209,7 +218,7 @@ configure_deferred()
     # function implementations are hidden symbols.  Verify that the latter
     # follow the deferred module boundary rather than being pulled back into
     # zImage by Kconfig.
-    for sym in USB_ATMEL_USBA USB_CONFIGFS CONFIGFS_FS \
+    for sym in USB_GADGET USB_ATMEL_USBA USB_CONFIGFS CONFIGFS_FS \
                USB_LIBCOMPOSITE USB_U_SERIAL USB_F_ACM USB_U_ETHER USB_F_NCM USB_F_FS
     do
         grep -q "^CONFIG_${sym}=m$" "$config" ||
