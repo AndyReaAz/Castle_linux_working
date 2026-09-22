@@ -354,21 +354,6 @@
 					compatible = "sensirion,sht4x";
 					reg = <0x44>;
 				};
-				als@52 {
-					compatible = "avago,apds9300";
-					reg = <0x52>;
-				};
-				
-				drv2605@5a {
-					compatible = "ti,drv2605";
-					reg = <0x5A>;
-					library-sel = <1>;
-					vib-rated-mv = <3200>;
-					vib-overdrive-mv = <3200>;
-					vbat-supply = <&vddin_3v3>;
-					enable = <&pioA PIN_PA7 GPIO_ACTIVE_HIGH>;
-					mode = <2>;
-				};
 				presstemp@5c {
 					compatible = "st,lps22hb-press";
 					reg = <0x5c>;
