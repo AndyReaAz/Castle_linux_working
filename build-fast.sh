@@ -2,6 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+OUT="${KERNEL_OUT:-$ROOT/build-fast}"
 ARCH=arm
 TOOLCHAIN_PREFIX="${KERNEL_TOOLCHAIN_PREFIX:-arm-linux-gnueabihf-}"
 CROSS_COMPILE="$TOOLCHAIN_PREFIX"
@@ -20,39 +21,6 @@ if ! command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v lz4 >/dev/null 2>&1; then
-    echo "error: host lz4 tool is required for CONFIG_KERNEL_LZ4" >&2
-    echo "Install the system lz4 package, then rerun." >&2
-    exit 1
-fi
-
-if [ ! -f "$ROOT/.config" ]; then
-    if [ -n "${KERNEL_BASE_CONFIG:-}" ] && [ -f "$KERNEL_BASE_CONFIG" ]; then
-        cp "$KERNEL_BASE_CONFIG" "$ROOT/.config"
-        echo "Seeded .config from $KERNEL_BASE_CONFIG"
-    else
-        echo "error: no kernel .config in $ROOT" >&2
-        echo "Set KERNEL_BASE_CONFIG=/path/to/known-good/.config on the first run." >&2
-        exit 1
-    fi
-fi
-
-if [ ! -f "$ROOT/.config.pre-fastboot" ]; then
-    cp "$ROOT/.config" "$ROOT/.config.pre-fastboot"
-fi
-
-cfg="$ROOT/scripts/config"
-config="$ROOT/.config"
-
-# Stage 1 fast-boot baseline: compression only.
-# Keep the DTS and driver/probe topology exactly as the current meter build.
-"$cfg" --file "$config" -e KERNEL_LZ4
-for sym in KERNEL_GZIP KERNEL_BZIP2 KERNEL_LZMA KERNEL_XZ KERNEL_LZO KERNEL_ZSTD KERNEL_UNCOMPRESSED; do
-    "$cfg" --file "$config" -d "$sym"
-done
-
-make_args="ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE"
-
 if command -v ccache >/dev/null 2>&1 && [ "${KERNEL_CCACHE:-1}" = "1" ]; then
     CC="ccache ${TOOLCHAIN_PREFIX}gcc"
     HOSTCC="ccache gcc"
@@ -64,28 +32,86 @@ else
 fi
 export CC HOSTCC HOSTCXX
 
-make -C "$ROOT" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-    CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" olddefconfig
+seed_config()
+{
+    mkdir -p "$OUT"
 
-grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || {
-    echo "error: olddefconfig did not retain CONFIG_KERNEL_LZ4=y" >&2
-    exit 1
+    if [ ! -f "$OUT/.config" ]; then
+        base="${KERNEL_BASE_CONFIG:-}"
+        if [ -z "$base" ] && [ -f "$ROOT/.config" ]; then
+            base="$ROOT/.config"
+        fi
+
+        [ -n "$base" ] && [ -f "$base" ] || {
+            echo "error: no base kernel configuration found" >&2
+            echo "Set KERNEL_BASE_CONFIG=/path/to/known-good/.config" >&2
+            exit 1
+        }
+
+        cp "$base" "$OUT/.config"
+        echo "Seeded fast-boot config from $base"
+    fi
+}
+
+configure_fast()
+{
+    seed_config
+
+    command -v lz4 >/dev/null 2>&1 || {
+        echo "error: host lz4 tool is required for CONFIG_KERNEL_LZ4" >&2
+        echo "Install the system lz4 package, then rerun." >&2
+        exit 1
+    }
+
+    cfg="$ROOT/scripts/config"
+    config="$OUT/.config"
+
+    # Stage 1 fast-boot baseline: compression only.
+    # Keep DTS, drivers, probe topology and video/display behaviour unchanged.
+    "$cfg" --file "$config" -e KERNEL_LZ4
+    for sym in \
+        KERNEL_GZIP KERNEL_BZIP2 KERNEL_LZMA KERNEL_XZ \
+        KERNEL_LZO KERNEL_ZSTD KERNEL_UNCOMPRESSED
+    do
+        "$cfg" --file "$config" -d "$sym"
+    done
+
+    make -C "$ROOT" O="$OUT" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        olddefconfig
+
+    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || {
+        echo "error: olddefconfig did not retain CONFIG_KERNEL_LZ4=y" >&2
+        exit 1
+    }
+}
+
+build_fast()
+{
+    make -C "$ROOT" O="$OUT" -j"$JOBS" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        zImage dtbs
 }
 
 case "${1:-build}" in
-    config)
-        ;;
     clean)
-        make -C "$ROOT" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" clean
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        exit 0
+        ;;
+    config)
+        configure_fast
         ;;
     rebuild)
-        make -C "$ROOT" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" clean
-        make -C "$ROOT" -j"$JOBS" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-            CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" zImage dtbs
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
         ;;
     build)
-        make -C "$ROOT" -j"$JOBS" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-            CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" zImage dtbs
+        configure_fast
+        build_fast
         ;;
     *)
         echo "Usage: $0 [build|rebuild|config|clean]" >&2
@@ -93,20 +119,22 @@ case "${1:-build}" in
         ;;
 esac
 
+config="$OUT/.config"
+
 echo
 echo "NextGen fast-boot kernel profile:"
 grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$config" || true
 
-if [ -f "$ROOT/arch/arm/boot/zImage" ]; then
+if [ -f "$OUT/arch/arm/boot/zImage" ]; then
     echo
     echo "Kernel image:"
-    ls -lh "$ROOT/arch/arm/boot/zImage"
+    ls -lh "$OUT/arch/arm/boot/zImage"
 fi
 
 dtb=""
 for candidate in \
-    "$ROOT/arch/arm/boot/dts/microchip/nextgen.dtb" \
-    "$ROOT/arch/arm/boot/dts/nextgen.dtb"
+    "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" \
+    "$OUT/arch/arm/boot/dts/nextgen.dtb"
 do
     if [ -f "$candidate" ]; then
         dtb="$candidate"
