@@ -130,7 +130,7 @@
 						
 						rootfs@880000 {
 							label = "rootfs";
-							reg = <0x00880000 0x1f780000>;
+							reg = <0x00880000 0x08000000>; /* 128 MiB; remainder intentionally spare */
 						};
 					};
 				};
@@ -166,9 +166,12 @@
 						};
 						partition@140000 {
 							/*
-							 * MX25V1635F is 2 MiB total. Keep this layout in
-							 * sync with U-Boot: 128 KiB is reserved for the
-							 * eventual NOR-backed environment.
+							 * MX25V1635F is 2 MiB total. The 128 KiB environment
+							 * partition contains two independent 64 KiB erase slots:
+							 *   +0x00000 primary,   16 KiB payload
+							 *   +0x10000 redundant, 16 KiB payload
+							 * Linux userspace must keep using the partition label
+							 * rather than relying on a fixed /dev/mtd number.
 							 */
 							label = "uboot-env";
 							reg = <0x140000 0x020000>;
@@ -487,6 +490,7 @@
 					<PIN_PC5__SPI1_NPCS1>,
 					<PIN_PC6__SPI1_NPCS2>;
 					bias-disable;
+					atmel,drive-strength = <3>;
 				};
 				
 				pinctrl_qspi1_default: qspi1_default {
