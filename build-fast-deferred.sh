@@ -118,8 +118,16 @@ configure_deferred()
     move_if_builtin WILC_SPI
     move_if_builtin WILC_SDIO
 
-    # USB gadget/UDC support stays built in because USBDeviceRun() is part of
-    # application startup. These are host/class drivers only.
+    # USB gadget setup is no longer part of the boot-critical path. Keep the
+    # generic gadget framework available, but defer the concrete Atmel UDC,
+    # configfs composite layer and configfs filesystem until usbcontrol.sh
+    # selects a non-zero runtime mask.  The Buildroot deferred profile
+    # blacklists the UDC modalias so eudev does not defeat this deferral.
+    move_if_builtin USB_ATMEL_USBA
+    move_if_builtin USB_CONFIGFS
+    move_if_builtin CONFIGFS_FS
+
+    # USB host/class drivers are also not required for application startup.
     move_if_builtin SND_USB_AUDIO
     move_if_builtin USB_ACM
     move_if_builtin USB_SERIAL_FTDI_SIO
@@ -174,7 +182,7 @@ configure_deferred()
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
                TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
-               USB_GADGET USB_ATMEL_USBA USB_CONFIGFS USB_CONFIGFS_ACM USB_CONFIGFS_NCM USB_CONFIGFS_F_FS CONFIGFS_FS \
+               USB_GADGET USB_CONFIGFS_ACM USB_CONFIGFS_NCM USB_CONFIGFS_F_FS \
                ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
                SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
     do
