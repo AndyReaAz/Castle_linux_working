@@ -200,7 +200,8 @@ configure_deferred()
     # function implementations are hidden symbols.  Verify that the latter
     # follow the deferred module boundary rather than being pulled back into
     # zImage by Kconfig.
-    for sym in USB_LIBCOMPOSITE USB_U_SERIAL USB_F_ACM USB_U_ETHER USB_F_NCM USB_F_FS
+    for sym in USB_ATMEL_USBA USB_CONFIGFS CONFIGFS_FS \
+               USB_LIBCOMPOSITE USB_U_SERIAL USB_F_ACM USB_U_ETHER USB_F_NCM USB_F_FS
     do
         grep -q "^CONFIG_${sym}=m$" "$config" ||
             die "deferred gadget CONFIG_${sym} did not resolve to m"
