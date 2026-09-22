@@ -196,6 +196,16 @@ configure_deferred()
             die "requested deferred CONFIG_${sym} did not resolve to m"
     done < "$EXPECTED_MODULES_FILE"
 
+    # USB_CONFIGFS remains the user-facing tristate while its selected
+    # function implementations are hidden symbols.  Verify that the latter
+    # follow the deferred module boundary rather than being pulled back into
+    # zImage by Kconfig.
+    for sym in USB_LIBCOMPOSITE USB_U_SERIAL USB_F_ACM USB_U_ETHER USB_F_NCM USB_F_FS
+    do
+        grep -q "^CONFIG_${sym}=m$" "$config" ||
+            die "deferred gadget CONFIG_${sym} did not resolve to m"
+    done
+
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
     [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
         die "unexpected kernel release: $KERNELRELEASE"
