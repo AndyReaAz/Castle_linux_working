@@ -165,8 +165,13 @@
 							reg = <0x8000 0x138000>;
 						};
 						partition@140000 {
+							/*
+							 * MX25V1635F is 2 MiB total. Keep this layout in
+							 * sync with U-Boot: 128 KiB is reserved for the
+							 * eventual NOR-backed environment.
+							 */
 							label = "uboot-env";
-							reg = <0x140000 0x200000>;
+							reg = <0x140000 0x020000>;
 						};
 					};
 				};
