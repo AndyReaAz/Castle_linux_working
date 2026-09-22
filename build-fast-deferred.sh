@@ -137,6 +137,14 @@ configure_deferred()
         MMC_SDHCI_PLTFM \
         MMC_SDHCI_OF_AT91 \
         EXT4_FS \
+        DRM \
+        DRM_FBDEV_EMULATION \
+        DRM_ATMEL_HLCDC \
+        DRM_PANEL_SIMPLE \
+        BACKLIGHT_CLASS_DEVICE \
+        BACKLIGHT_PWM \
+        PWM \
+        PWM_ATMEL_HLCDC_PWM \
         ATMEL_SSC \
         SND_ATMEL_SOC \
         SND_ATMEL_SOC_SSC \
