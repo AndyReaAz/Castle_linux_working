@@ -92,6 +92,18 @@ configure_deferred()
     seed_config
     find_lz4
 
+    dts="$ROOT/arch/arm/boot/dts/microchip/nextgen.dts"
+    grep -q 'reg = <0x0 0x8000>;' "$dts" ||
+        die "AT91Bootstrap NOR partition changed"
+    grep -q 'reg = <0x8000 0x138000>;' "$dts" ||
+        die "U-Boot NOR partition changed"
+    grep -q 'reg = <0x140000 0x020000>;' "$dts" ||
+        die "redundant U-Boot environment partition changed"
+    grep -q 'reg = <0x00880000 0x08000000>;' "$dts" ||
+        die "SPI NAND rootfs partition is not 128 MiB"
+    grep -q 'spi-max-frequency = <90000000>;' "$dts" ||
+        die "SPI NAND QSPI frequency request changed"
+
     cfg="$ROOT/scripts/config"
     config="$OUT/.config"
     : > "$EXPECTED_MODULES_FILE"
@@ -162,6 +174,11 @@ configure_deferred()
     move_if_builtin MTD_SPI_NAND
     move_if_builtin MTD_SPI_NOR
 
+    "$cfg" --file "$config" -e MTD
+    "$cfg" --file "$config" -e MTD_UBI
+    "$cfg" --file "$config" -e UBIFS_FS
+    "$cfg" --file "$config" -d MTD_UBI_FASTMAP
+
     # The known-good kernel enabled legacy PCMCIA-era MTD block translators.
     # CONFIG_FTL in particular scans each MTD partition for an FTL header,
     # wasting hundreds of milliseconds on the SPI NAND. NextGen uses raw MTD
@@ -205,6 +222,8 @@ configure_deferred()
         die "Bluetooth unexpectedly enabled"
     grep -q '^# CONFIG_DEBUG_FS is not set$' "$config" ||
         die "debugfs unexpectedly enabled"
+    grep -q '^# CONFIG_MTD_UBI_FASTMAP is not set$' "$config" ||
+        die "UBI fastmap unexpectedly enabled before baseline timing"
 
     for sym in MTD_BLOCK MTD_BLOCK_RO FTL NFTL INFTL RFD_FTL SSFDC SM_FTL MTD_SWAP
     do
@@ -212,7 +231,7 @@ configure_deferred()
             die "legacy MTD translator CONFIG_${sym} unexpectedly enabled"
     done
 
-    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+    for sym in ARCH_AT91 SOC_SAMA5D2 MTD MTD_UBI UBIFS_FS MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
                BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
                TOUCHSCREEN_GOODIX SENSORS_SHT4x IIO_ST_PRESS IIO_ST_PRESS_I2C \
