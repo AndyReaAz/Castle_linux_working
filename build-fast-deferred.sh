@@ -105,20 +105,16 @@ configure_deferred()
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
+    # Bluetooth is intentionally absent from the current NextGen product.
+    # Disable both the generic Linux Bluetooth stack and the WILC3000 vendor
+    # /dev/wilc_bt firmware/control path while retaining Wi-Fi.
+    "$cfg" --file "$config" -d BT
+    "$cfg" --file "$config" -d WILC_BT
+
     # Network devices not needed for rootfs, display or measurement startup.
     move_if_builtin MACB
     move_if_builtin WILC_SPI
     move_if_builtin WILC_SDIO
-
-    # Bluetooth is not brought up by BluetoothInit(); firmware/HCI startup is
-    # a separate userspace operation, so keep it out of the compressed kernel.
-    move_if_builtin BT_HCIBTUSB
-    move_if_builtin BT_HCIUART
-    move_if_builtin BT_HCIVHCI
-    move_if_builtin BT_RFCOMM
-    move_if_builtin BT_BNEP
-    move_if_builtin BT_HIDP
-    move_if_builtin BT
 
     # USB device/gadget support is deliberately left alone because the
     # application starts USBDeviceRun() during normal startup.  These are host
@@ -171,7 +167,135 @@ configure_deferred()
 
     make_kernel olddefconfig
 
-    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || die "CONFIG_KERNEL_LZ4 did not remain enabled"
+    grep -q '^CONFIG_KERNEL_LZ4=y    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
+               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
+               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
+               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
+    done
+
+    while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
+    done < "$EXPECTED_MODULES_FILE"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    echo
+    echo "NextGen deferred kernel output:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
+        sort -nr | head -30 || true
+}
+
+case "${1:-build}" in
+    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
+    config) configure_deferred ;;
+    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
+    build) configure_deferred; build_deferred ;;
+    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
+esac
+ "$config" || die "CONFIG_KERNEL_LZ4 did not remain enabled"
+
+    grep -q '^# CONFIG_BT is not set    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
+               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
+               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
+               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
+    done
+
+    while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
+    done < "$EXPECTED_MODULES_FILE"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    echo
+    echo "NextGen deferred kernel output:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
+        sort -nr | head -30 || true
+}
+
+case "${1:-build}" in
+    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
+    config) configure_deferred ;;
+    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
+    build) configure_deferred; build_deferred ;;
+    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
+esac
+ "$config" ||
+        die "Bluetooth unexpectedly enabled"
+    grep -q '^# CONFIG_WILC_BT is not set    for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
+               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
+               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM DMADEVICES AT_XDMAC \
+               ATMEL_SSC SND_ATMEL_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
+               SND_SOC_ADS131A_CODEC SND_AUDIO_GRAPH_CARD2 TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" || die "critical CONFIG_${sym} is no longer built-in"
+    done
+
+    while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        grep -q "^CONFIG_${sym}=m$" "$config" || die "requested deferred CONFIG_${sym} did not resolve to m"
+    done < "$EXPECTED_MODULES_FILE"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+}
+
+build_deferred()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+
+    rm -rf "$OUT/mods"
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
+
+    echo
+    echo "NextGen deferred kernel output:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+    find "$OUT/mods/lib/modules" -type f -name '*.ko*' -printf '%s %p\n' 2>/dev/null |
+        sort -nr | head -30 || true
+}
+
+case "${1:-build}" in
+    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
+    config) configure_deferred ;;
+    rebuild) rm -rf "$OUT"; configure_deferred; build_deferred ;;
+    build) configure_deferred; build_deferred ;;
+    *) echo "Usage: $0 [build|rebuild|config|clean]" >&2; exit 2 ;;
+esac
+ "$config" ||
+        die "WILC Bluetooth control path unexpectedly enabled"
 
     for sym in ARCH_AT91 SOC_SAMA5D2 MMC MMC_BLOCK MMC_SDHCI MMC_SDHCI_PLTFM MMC_SDHCI_OF_AT91 EXT4_FS \
                DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE MFD_ATMEL_HLCDC FB FB_SIMPLE \
