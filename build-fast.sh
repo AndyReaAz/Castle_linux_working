@@ -67,9 +67,7 @@ seed_config()
 
     grep -q '^CONFIG_ARCH_AT91=y$' "$OUT/.config" ||
         die "base config is not AT91"
-    grep -q '^CONFIG_SOC_SAMA5D2=y$' "$OUT/.config" ||
-        die "base config is not SAMA5D2"
-}
+    grep -q '^CONFIG_SOC_SAMA5D2=y}
 
 make_kernel()
 {
@@ -107,13 +105,138 @@ configure_fast()
         "$cfg" --file "$config" -d "$sym"
     done
 
-    # The current NextGen DT uses the SAMA5D2 HLCDC DRM/KMS driver.  Keep
-    # userspace on the existing /dev/fb0 interface via DRM fbdev emulation;
-    # no userspace DRM conversion is required.
-    "$cfg" --file "$config" -e DRM
-    "$cfg" --file "$config" -e DRM_FBDEV_EMULATION
-    "$cfg" --file "$config" -e DRM_ATMEL_HLCDC
-    "$cfg" --file "$config" -e DRM_PANEL_SIMPLE
+    # Keep the deployed kernel/module release directory stable despite the
+    # snapshot-style Git history used by the working mirror.
+    "$cfg" --file "$config" --set-str LOCALVERSION "+"
+    "$cfg" --file "$config" -d LOCALVERSION_AUTO
+
+    make_kernel olddefconfig
+
+    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
+        die "CONFIG_KERNEL_LZ4 did not resolve to y"
+
+    # These are known-good NextGen requirements from workingconfig.  The
+    # fast-boot baseline must not change their built-in status.
+    for sym in         ARCH_AT91         SOC_SAMA5D2         DRM         DRM_FBDEV_EMULATION         DRM_ATMEL_HLCDC         DRM_PANEL_SIMPLE         BACKLIGHT_CLASS_DEVICE         BACKLIGHT_PWM         PWM         PWM_ATMEL_HLCDC_PWM         ATMEL_SSC         SND_ATMEL_SOC         SND_ATMEL_SOC_SSC         SND_ATMEL_SOC_SSC_DMA         SND_SOC_ADS131A_CODEC         SND_AUDIO_GRAPH_CARD2         TI_ADS131A
+    do
+        grep -q "^CONFIG_${sym}=y$" "$config" ||
+            die "CONFIG_${sym} did not remain built-in"
+    done
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
+
+    show_config
+}
+
+build_fast()
+{
+    make_kernel -j"$JOBS" \
+        zImage \
+        microchip/nextgen.dtb
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
+}
+
+show_outputs()
+{
+    if [ -f "$OUT/arch/arm/boot/zImage" ]; then
+        echo
+        echo "Kernel image:"
+        ls -lh "$OUT/arch/arm/boot/zImage"
+    fi
+
+    if [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb"
+    fi
+
+    module_count=$(grep -c '=m$' "$OUT/.config" || true)
+    echo "  modular config entries: $module_count"
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_fast
+        show_outputs
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    build)
+        configure_fast
+        build_fast
+        show_outputs
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+ "$OUT/.config" ||
+        die "base config is not SAMA5D2"
+
+    # Fast-boot must start from the proven meter configuration, not construct
+    # a new display stack. Reject stale/incorrect configs immediately.
+    for sym in DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
+               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM
+    do
+        grep -q "^CONFIG_${sym}=y$" "$OUT/.config" ||
+            die "base config is not the known-good display configuration: CONFIG_${sym} is not y"
+    done
+}
+
+make_kernel()
+{
+    make -C "$ROOT" O="$OUT"         ARCH="$ARCH"         CROSS_COMPILE="$CROSS_COMPILE"         CC="$CC"         HOSTCC="$HOSTCC"         HOSTCXX="$HOSTCXX"         LZ4="$LZ4_TOOL"         LOCALVERSION=         "$@"
+}
+
+show_config()
+{
+    echo
+    echo "NextGen fast-boot kernel profile:"
+    echo "  ARCH          = $ARCH"
+    echo "  CROSS_COMPILE = $CROSS_COMPILE"
+    echo "  CC            = $CC"
+    echo "  HOSTCC        = $HOSTCC"
+    echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
+
+    grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
+    grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(ARCH_AT91|SOC_SAMA5D2|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|ATMEL_SSC|SND_ATMEL_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
+}
+
+configure_fast()
+{
+    seed_config
+    find_lz4
+
+    cfg="$ROOT/scripts/config"
+    config="$OUT/.config"
+
+    # Stage 1 fast-boot baseline: compression only.
+    # Preserve the known-good NextGen hardware/driver configuration.
+    "$cfg" --file "$config" -e KERNEL_LZ4
+    for sym in         KERNEL_GZIP         KERNEL_BZIP2         KERNEL_LZMA         KERNEL_XZ         KERNEL_LZO         KERNEL_ZSTD         KERNEL_UNCOMPRESSED
+    do
+        "$cfg" --file "$config" -d "$sym"
+    done
 
     # Keep the deployed kernel/module release directory stable despite the
     # snapshot-style Git history used by the working mirror.
