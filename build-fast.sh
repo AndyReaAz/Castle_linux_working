@@ -129,7 +129,13 @@ configure_fast()
 
 build_fast()
 {
-    make_kernel -j"$JOBS" zImage dtbs modules
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+
+    [ -f "$OUT/arch/arm/boot/zImage" ] ||
+        die "zImage was not produced"
+
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
 
     rm -rf "$OUT/mods"
     make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
