@@ -21,7 +21,12 @@ if ! command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1; then
     exit 1
 fi
 
-if command -v ccache >/dev/null 2>&1 && [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+    command -v ccache >/dev/null 2>&1 || {
+        echo "error: ccache requested but not found" >&2
+        echo "Set KERNEL_CCACHE=0 only if you intentionally want an uncached build." >&2
+        exit 1
+    }
     CC="ccache ${TOOLCHAIN_PREFIX}gcc"
     HOSTCC="ccache gcc"
     HOSTCXX="ccache g++"
@@ -127,6 +132,10 @@ config="$OUT/.config"
 
 echo
 echo "NextGen fast-boot kernel profile:"
+echo "  ARCH          = $ARCH"
+echo "  CROSS_COMPILE = $CROSS_COMPILE"
+echo "  CC            = $CC"
+echo "  HOSTCC        = $HOSTCC"
 grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$config" || true
 
 if [ -f "$OUT/arch/arm/boot/zImage" ]; then
@@ -151,7 +160,7 @@ if [ -n "$dtb" ]; then
     ls -lh "$dtb"
 fi
 
-if command -v ccache >/dev/null 2>&1 && [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
     echo
     ccache -s | sed -n '1,12p'
 fi
