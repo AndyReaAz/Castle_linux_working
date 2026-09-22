@@ -7,26 +7,23 @@ ARCH=arm
 TOOLCHAIN_PREFIX="${KERNEL_TOOLCHAIN_PREFIX:-arm-linux-gnueabihf-}"
 CROSS_COMPILE="$TOOLCHAIN_PREFIX"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+EXPECTED_RELEASE="6.6.23-linux4microchip-2024.04+"
 
 export ARCH CROSS_COMPILE
 
-[ -x "$ROOT/scripts/config" ] || {
-    echo "error: scripts/config not found in $ROOT" >&2
+die()
+{
+    echo "error: $*" >&2
     exit 1
 }
 
-if ! command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1; then
-    echo "error: ARM compiler not found: ${TOOLCHAIN_PREFIX}gcc" >&2
-    echo "Set KERNEL_TOOLCHAIN_PREFIX=/path/to/arm-linux-gnueabihf-" >&2
-    exit 1
-fi
+[ -x "$ROOT/scripts/config" ] || die "scripts/config not found in $ROOT"
+command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1 ||
+    die "ARM compiler not found: ${TOOLCHAIN_PREFIX}gcc"
 
 if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
-    command -v ccache >/dev/null 2>&1 || {
-        echo "error: ccache requested but not found" >&2
-        echo "Set KERNEL_CCACHE=0 only if you intentionally want an uncached build." >&2
-        exit 1
-    }
+    command -v ccache >/dev/null 2>&1 ||
+        die "ccache requested but not found; set KERNEL_CCACHE=0 only to disable it intentionally"
     CC="ccache ${TOOLCHAIN_PREFIX}gcc"
     HOSTCC="ccache gcc"
     HOSTCXX="ccache g++"
@@ -36,6 +33,17 @@ else
     HOSTCXX="g++"
 fi
 export CC HOSTCC HOSTCXX
+
+find_lz4()
+{
+    if command -v lz4c >/dev/null 2>&1; then
+        LZ4_TOOL=lz4c
+    elif command -v lz4 >/dev/null 2>&1; then
+        LZ4_TOOL=lz4
+    else
+        die "host lz4/lz4c tool is required for CONFIG_KERNEL_LZ4"
+    fi
+}
 
 seed_config()
 {
@@ -47,36 +55,45 @@ seed_config()
             base="$ROOT/.config"
         fi
 
-        [ -n "$base" ] && [ -f "$base" ] || {
-            echo "error: no base kernel configuration found" >&2
-            echo "Set KERNEL_BASE_CONFIG=/path/to/known-good/.config" >&2
-            exit 1
-        }
+        [ -n "$base" ] && [ -f "$base" ] ||
+            die "no base kernel config; set KERNEL_BASE_CONFIG=/path/to/known-good/.config"
 
         cp "$base" "$OUT/.config"
         echo "Seeded fast-boot config from $base"
     fi
 }
 
+make_kernel()
+{
+    make -C "$ROOT" O="$OUT" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        LZ4="$LZ4_TOOL" LOCALVERSION= "$@"
+}
+
+show_config()
+{
+    echo
+    echo "NextGen fast-boot kernel profile:"
+    echo "  ARCH          = $ARCH"
+    echo "  CROSS_COMPILE = $CROSS_COMPILE"
+    echo "  CC            = $CC"
+    echo "  HOSTCC        = $HOSTCC"
+    echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
+    grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(SND_ATMEL_SOC_SSC|TI_ADS131A|SND_SOC_ADS131A_CODEC)=' "$OUT/.config" || true
+}
+
 configure_fast()
 {
     seed_config
-
-    if command -v lz4c >/dev/null 2>&1; then
-        LZ4_TOOL=lz4c
-    elif command -v lz4 >/dev/null 2>&1; then
-        LZ4_TOOL=lz4
-    else
-        echo "error: host lz4/lz4c tool is required for CONFIG_KERNEL_LZ4" >&2
-        echo "Install the system lz4 package, then rerun." >&2
-        exit 1
-    fi
+    find_lz4
 
     cfg="$ROOT/scripts/config"
     config="$OUT/.config"
 
-    # Stage 1 fast-boot baseline: compression only.
-    # Keep DTS, drivers, probe topology and video/display behaviour unchanged.
+    # Stage 1 fast-boot baseline: change compression only.
+    # DTS, probe topology and video/display behaviour remain unchanged.
     "$cfg" --file "$config" -e KERNEL_LZ4
     for sym in \
         KERNEL_GZIP KERNEL_BZIP2 KERNEL_LZMA KERNEL_XZ \
@@ -85,123 +102,73 @@ configure_fast()
         "$cfg" --file "$config" -d "$sym"
     done
 
-    # Keep the deployed module ABI directory stable despite this snapshot
-    # repository having different Git history from linux4sam.
+    # Preserve the release string used by the deployed module directory.
+    # LOCALVERSION= on make suppresses SCM suffixes from this snapshot repo.
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
-    make -C "$ROOT" O="$OUT" \
-        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" LOCALVERSION= olddefconfig
+    make_kernel olddefconfig
 
-    grep -q '^CONFIG_KERNEL_LZ4=y
+    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
+        die "olddefconfig did not retain CONFIG_KERNEL_LZ4=y"
+
+    # The custom ADS131A driver calls exported helpers from atmel_ssc_dai.
+    # Kconfig now constrains TI_ADS131A to the same-or-lower tristate level.
+    # Catch an old/bad config before spending time compiling it.
+    if grep -q '^CONFIG_TI_ADS131A=y$' "$config" &&
+       ! grep -q '^CONFIG_SND_ATMEL_SOC_SSC=y$' "$config"; then
+        die "invalid config: TI_ADS131A=y requires SND_ATMEL_SOC_SSC=y"
+    fi
+
+    KERNELRELEASE=$(make_kernel -s kernelrelease)
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE (expected $EXPECTED_RELEASE)"
+
+    show_config
+}
 
 build_fast()
 {
-    make -C "$ROOT" O="$OUT" -j"$JOBS" \
-        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" LOCALVERSION= zImage dtbs modules
+    make_kernel -j"$JOBS" zImage dtbs modules
 
     rm -rf "$OUT/mods"
-    make -C "$ROOT" O="$OUT" \
-        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" LOCALVERSION= \
-        INSTALL_MOD_PATH="$OUT/mods" modules_install
+    make_kernel INSTALL_MOD_PATH="$OUT/mods" modules_install
 }
 
-case "${1:-build}" in
-    clean)
-        rm -rf "$OUT"
-        echo "Removed $OUT"
-        exit 0
-        ;;
-    config)
-        configure_fast
-        ;;
-    rebuild)
-        rm -rf "$OUT"
-        configure_fast
-        build_fast
-        ;;
-    build)
-        configure_fast
-        build_fast
-        ;;
-    *)
-        echo "Usage: $0 [build|rebuild|config|clean]" >&2
-        exit 2
-        ;;
-esac
-
-config="$OUT/.config"
-
-echo
-echo "NextGen fast-boot kernel profile:"
-echo "  ARCH          = $ARCH"
-echo "  CROSS_COMPILE = $CROSS_COMPILE"
-echo "  CC            = $CC"
-echo "  HOSTCC        = $HOSTCC"
-echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
-grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$config" || true
-grep -E '^CONFIG_(SND_ATMEL_SOC_SSC|TI_ADS131A|SND_SOC_ADS131A_CODEC)=' "$config" || true
-
-if [ -f "$OUT/arch/arm/boot/zImage" ]; then
-    echo
-    echo "Kernel image:"
-    ls -lh "$OUT/arch/arm/boot/zImage"
-fi
-
-dtb=""
-for candidate in \
-    "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" \
-    "$OUT/arch/arm/boot/dts/nextgen.dtb"
-do
-    if [ -f "$candidate" ]; then
-        dtb="$candidate"
-        break
-    fi
-done
-
-if [ -n "$dtb" ]; then
-    echo "Device tree:"
-    ls -lh "$dtb"
-fi
-
-if [ -d "$OUT/mods/lib/modules" ]; then
-    echo "Modules staged:"
-    find "$OUT/mods/lib/modules" -type f \
-        \( -name '*ads131a*.ko' -o -name '*atmel*ssc*.ko' \) -print || true
-fi
-
-if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
-    echo
-    ccache -s | sed -n '1,12p'
-fi
- "$config" || {
-        echo "error: olddefconfig did not retain CONFIG_KERNEL_LZ4=y" >&2
-        exit 1
-    }
-
-    KERNELRELEASE=$(make -s -C "$ROOT" O="$OUT" \
-        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" LOCALVERSION= kernelrelease)
-
-    [ "$KERNELRELEASE" = "6.6.23-linux4microchip-2024.04+" ] || {
-        echo "error: unexpected kernel release: $KERNELRELEASE" >&2
-        exit 1
-    }
-}
-
-build_fast()
+show_outputs()
 {
-    make -C "$ROOT" O="$OUT" -j"$JOBS" \
-        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
-        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" zImage dtbs
+    if [ -f "$OUT/arch/arm/boot/zImage" ]; then
+        echo
+        echo "Kernel image:"
+        ls -lh "$OUT/arch/arm/boot/zImage"
+    fi
+
+    dtb=""
+    for candidate in \
+        "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" \
+        "$OUT/arch/arm/boot/dts/nextgen.dtb"
+    do
+        if [ -f "$candidate" ]; then
+            dtb="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$dtb" ]; then
+        echo "Device tree:"
+        ls -lh "$dtb"
+    fi
+
+    if [ -d "$OUT/mods/lib/modules" ]; then
+        echo "Relevant staged modules:"
+        find "$OUT/mods/lib/modules" -type f -name '*ads131a*.ko' -print || true
+        find "$OUT/mods/lib/modules" -type f -name '*atmel*ssc*.ko' -print || true
+    fi
+
+    if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+        echo
+        ccache -s | sed -n '1,12p'
+    fi
 }
 
 case "${1:-build}" in
@@ -212,55 +179,21 @@ case "${1:-build}" in
         ;;
     config)
         configure_fast
+        show_outputs
         ;;
     rebuild)
         rm -rf "$OUT"
         configure_fast
         build_fast
+        show_outputs
         ;;
     build)
         configure_fast
         build_fast
+        show_outputs
         ;;
     *)
         echo "Usage: $0 [build|rebuild|config|clean]" >&2
         exit 2
         ;;
 esac
-
-config="$OUT/.config"
-
-echo
-echo "NextGen fast-boot kernel profile:"
-echo "  ARCH          = $ARCH"
-echo "  CROSS_COMPILE = $CROSS_COMPILE"
-echo "  CC            = $CC"
-echo "  HOSTCC        = $HOSTCC"
-grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$config" || true
-
-if [ -f "$OUT/arch/arm/boot/zImage" ]; then
-    echo
-    echo "Kernel image:"
-    ls -lh "$OUT/arch/arm/boot/zImage"
-fi
-
-dtb=""
-for candidate in \
-    "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" \
-    "$OUT/arch/arm/boot/dts/nextgen.dtb"
-do
-    if [ -f "$candidate" ]; then
-        dtb="$candidate"
-        break
-    fi
-done
-
-if [ -n "$dtb" ]; then
-    echo "Device tree:"
-    ls -lh "$dtb"
-fi
-
-if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
-    echo
-    ccache -s | sed -n '1,12p'
-fi
