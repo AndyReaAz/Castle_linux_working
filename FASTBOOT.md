@@ -64,9 +64,10 @@ The boot-critical and measurement paths are explicitly checked after
 - Goodix touch
 - SHT4x and LPS22HB pressure/temperature sensor paths
 - the complete Atmel SSC/ADS131A ALSA path
-- the generic USB gadget core stays built in, but the concrete Atmel UDC,
-  configfs filesystem/composite layer and ACM/NCM/FunctionFS implementations
-  are deliberately deferred as modules
+- the USB gadget core, Atmel UDC, configfs filesystem/composite layer and
+  ACM/NCM/FunctionFS implementations are deliberately deferred as modules
+- the boot-partition VFAT/FAT stack and CP437/ISO-8859-1 codepages are modules;
+  /boot itself is mounted on demand rather than by early mount -a
 
 Generic kernel Bluetooth is disabled with `CONFIG_BT=n`. The legacy vendor
 WILC source, including its old Bluetooth implementation, is intentionally left
@@ -86,8 +87,8 @@ before starting NetworkManager. Other deferred DT modules can still be loaded
 normally by eudev/kmod.
 
 USB gadget support follows the same on-demand policy. The deferred kernel uses
-`CONFIG_USB_ATMEL_USBA=m`, `CONFIG_USB_CONFIGFS=m` and modular configfs plus
-ACM/NCM/FunctionFS implementations. The Buildroot profile removes the
+`CONFIG_USB_GADGET=m`, `CONFIG_USB_ATMEL_USBA=m`, `CONFIG_USB_CONFIGFS=m`
+and modular configfs plus ACM/NCM/FunctionFS implementations. The Buildroot profile removes the
 unconditional configfs mount, prevents the Atmel UDC DT modalias from being
 autoloaded by eudev, and leaves normal `S50usb-gadget` startup empty. About two
 seconds after the main UI loop starts, the application runs `USBDeviceRun()`;
@@ -95,6 +96,19 @@ a zero USB mask loads nothing, while a non-zero mask causes
 `usbcontrol.sh` to load only the required gadget modules, construct only the
 selected functions and bind the UDC once. Engineering mode retains the early
 NCM-only recovery path.
+
+The Buildroot fast profile also marks the SD boot VFAT partition `noauto`.
+Normal application startup does not consume it. `SettingsSyncUbootVariables()`
+mounts `/boot` immediately before `fw_printenv/fw_setenv`, preserving later
+product/manufacturer environment updates while removing the early VFAT mount
+from `mount -a`.
+
+Noncritical userspace services are similarly kept installed but removed from
+`rcS`: D-Bus and NetworkManager start together at the application's delayed
+Wi-Fi stage, dnsmasq is launched only by the NCM path, and rsyslog remains
+available for engineering diagnostics. Loopback is brought up directly by
+`S00NextGen`, so the generic ifupdown pass is skipped; the sysctl init script
+is skipped only when the completed target contains no sysctl configuration.
 
 The output is separate from the LZ4 control build:
 
