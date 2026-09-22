@@ -50,19 +50,26 @@ seed_config()
 {
     mkdir -p "$OUT"
 
-    if [ ! -f "$OUT/.config" ]; then
-        base="${KERNEL_BASE_CONFIG:-}"
+    base="${KERNEL_BASE_CONFIG:-}"
 
-        if [ -z "$base" ] && [ -f "$ROOT/.config" ]; then
-            base="$ROOT/.config"
-        fi
-
-        [ -n "$base" ] && [ -f "$base" ] ||
-            die "no base config; set KERNEL_BASE_CONFIG=/path/to/.config"
-
+    if [ -n "$base" ]; then
+        [ -f "$base" ] ||
+            die "KERNEL_BASE_CONFIG does not exist: $base"
         cp "$base" "$OUT/.config"
         echo "Seeded fast-boot config from $base"
+    elif [ ! -f "$OUT/.config" ]; then
+        if [ -f "$ROOT/.config" ]; then
+            cp "$ROOT/.config" "$OUT/.config"
+            echo "Seeded fast-boot config from $ROOT/.config"
+        else
+            die "no base config; set KERNEL_BASE_CONFIG=/path/to/.config"
+        fi
     fi
+
+    grep -q '^CONFIG_ARCH_AT91=y$' "$OUT/.config" ||
+        die "base config is not an AT91 kernel (CONFIG_ARCH_AT91=y missing)"
+    grep -q '^CONFIG_SOC_SAMA5D2=y$' "$OUT/.config" ||
+        die "base config is not SAMA5D2 (CONFIG_SOC_SAMA5D2=y missing)"
 }
 
 make_kernel()
@@ -100,8 +107,8 @@ configure_fast()
         "$cfg" --file "$config" -d "$sym"
     done
 
-    # The inherited NextGen config was monolithic.  Enable module support
-    # explicitly before requesting the SSC/ADS131A capture stack as modules.
+    # Keep module support enabled and request the SSC/ADS131A capture stack
+    # as modules.
     "$cfg" --file "$config" -e MODULES
     "$cfg" --file "$config" -m ATMEL_SSC
     "$cfg" --file "$config" -m SND_ATMEL_SOC
