@@ -20,7 +20,6 @@
 
 #include "netdev.h"
 
-
 static struct wilc *wilc_bt;
 static dev_t chc_dev_no; /* Global variable for the first device number */
 static struct cdev str_chc_dev; /* Global variable for the character */
