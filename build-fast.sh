@@ -85,13 +85,113 @@ configure_fast()
         "$cfg" --file "$config" -d "$sym"
     done
 
+    # Keep the deployed module ABI directory stable despite this snapshot
+    # repository having different Git history from linux4sam.
+    "$cfg" --file "$config" --set-str LOCALVERSION "+"
+    "$cfg" --file "$config" -d LOCALVERSION_AUTO
+
     make -C "$ROOT" O="$OUT" \
         ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
         CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        LZ4="$LZ4_TOOL" olddefconfig
+        LZ4="$LZ4_TOOL" LOCALVERSION= olddefconfig
 
-    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || {
+    grep -q '^CONFIG_KERNEL_LZ4=y
+
+build_fast()
+{
+    make -C "$ROOT" O="$OUT" -j"$JOBS" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        LZ4="$LZ4_TOOL" LOCALVERSION= zImage dtbs modules
+
+    rm -rf "$OUT/mods"
+    make -C "$ROOT" O="$OUT" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        LZ4="$LZ4_TOOL" LOCALVERSION= \
+        INSTALL_MOD_PATH="$OUT/mods" modules_install
+}
+
+case "${1:-build}" in
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        exit 0
+        ;;
+    config)
+        configure_fast
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
+        ;;
+    build)
+        configure_fast
+        build_fast
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|clean]" >&2
+        exit 2
+        ;;
+esac
+
+config="$OUT/.config"
+
+echo
+echo "NextGen fast-boot kernel profile:"
+echo "  ARCH          = $ARCH"
+echo "  CROSS_COMPILE = $CROSS_COMPILE"
+echo "  CC            = $CC"
+echo "  HOSTCC        = $HOSTCC"
+echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
+grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$config" || true
+grep -E '^CONFIG_(SND_ATMEL_SOC_SSC|TI_ADS131A|SND_SOC_ADS131A_CODEC)=' "$config" || true
+
+if [ -f "$OUT/arch/arm/boot/zImage" ]; then
+    echo
+    echo "Kernel image:"
+    ls -lh "$OUT/arch/arm/boot/zImage"
+fi
+
+dtb=""
+for candidate in \
+    "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" \
+    "$OUT/arch/arm/boot/dts/nextgen.dtb"
+do
+    if [ -f "$candidate" ]; then
+        dtb="$candidate"
+        break
+    fi
+done
+
+if [ -n "$dtb" ]; then
+    echo "Device tree:"
+    ls -lh "$dtb"
+fi
+
+if [ -d "$OUT/mods/lib/modules" ]; then
+    echo "Modules staged:"
+    find "$OUT/mods/lib/modules" -type f \
+        \( -name '*ads131a*.ko' -o -name '*atmel*ssc*.ko' \) -print || true
+fi
+
+if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+    echo
+    ccache -s | sed -n '1,12p'
+fi
+ "$config" || {
         echo "error: olddefconfig did not retain CONFIG_KERNEL_LZ4=y" >&2
+        exit 1
+    }
+
+    KERNELRELEASE=$(make -s -C "$ROOT" O="$OUT" \
+        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+        CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
+        LZ4="$LZ4_TOOL" LOCALVERSION= kernelrelease)
+
+    [ "$KERNELRELEASE" = "6.6.23-linux4microchip-2024.04+" ] || {
+        echo "error: unexpected kernel release: $KERNELRELEASE" >&2
         exit 1
     }
 }
