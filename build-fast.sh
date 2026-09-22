@@ -57,11 +57,15 @@ configure_fast()
 {
     seed_config
 
-    command -v lz4 >/dev/null 2>&1 || {
-        echo "error: host lz4 tool is required for CONFIG_KERNEL_LZ4" >&2
+    if command -v lz4c >/dev/null 2>&1; then
+        LZ4_TOOL=lz4c
+    elif command -v lz4 >/dev/null 2>&1; then
+        LZ4_TOOL=lz4
+    else
+        echo "error: host lz4/lz4c tool is required for CONFIG_KERNEL_LZ4" >&2
         echo "Install the system lz4 package, then rerun." >&2
         exit 1
-    }
+    fi
 
     cfg="$ROOT/scripts/config"
     config="$OUT/.config"
@@ -79,7 +83,7 @@ configure_fast()
     make -C "$ROOT" O="$OUT" \
         ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
         CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        olddefconfig
+        LZ4="$LZ4_TOOL" olddefconfig
 
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || {
         echo "error: olddefconfig did not retain CONFIG_KERNEL_LZ4=y" >&2
@@ -92,7 +96,7 @@ build_fast()
     make -C "$ROOT" O="$OUT" -j"$JOBS" \
         ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
         CC="$CC" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
-        zImage dtbs
+        LZ4="$LZ4_TOOL" zImage dtbs
 }
 
 case "${1:-build}" in
