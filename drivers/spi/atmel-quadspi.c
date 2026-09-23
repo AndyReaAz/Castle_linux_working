@@ -961,9 +961,53 @@ static int atmel_qspi_sama7g5_transfer(struct spi_mem *mem,
 	return atmel_qspi_wait_for_completion(aq, QSPI_SR_CSRA);
 }
 
+#define ATMEL_QSPI_PERF_BATCH_OPS	4096
+#define ATMEL_QSPI_PERF_PAGE_READ_OPCODE	0x13
+
+static u64 atmel_qspi_perf_ops;
+static u64 atmel_qspi_perf_pm_get_ns;
+static u64 atmel_qspi_perf_cfg_ns;
+static u64 atmel_qspi_perf_xfer_ns;
+static u64 atmel_qspi_perf_pm_put_ns;
+
+static void atmel_qspi_perf_account(u64 pm_get_ns, u64 cfg_ns,
+				    u64 xfer_ns, u64 pm_put_ns)
+{
+	u64 total_ns;
+
+	atmel_qspi_perf_ops++;
+	atmel_qspi_perf_pm_get_ns += pm_get_ns;
+	atmel_qspi_perf_cfg_ns += cfg_ns;
+	atmel_qspi_perf_xfer_ns += xfer_ns;
+	atmel_qspi_perf_pm_put_ns += pm_put_ns;
+
+	if (atmel_qspi_perf_ops < ATMEL_QSPI_PERF_BATCH_OPS)
+		return;
+
+	total_ns = atmel_qspi_perf_pm_get_ns + atmel_qspi_perf_cfg_ns +
+		   atmel_qspi_perf_xfer_ns + atmel_qspi_perf_pm_put_ns;
+
+	pr_info("page-read perf avg-ns/op pm_get=%llu cfg=%llu xfer=%llu pm_put=%llu total=%llu\\n",
+		(unsigned long long)(atmel_qspi_perf_pm_get_ns >> 12),
+		(unsigned long long)(atmel_qspi_perf_cfg_ns >> 12),
+		(unsigned long long)(atmel_qspi_perf_xfer_ns >> 12),
+		(unsigned long long)(atmel_qspi_perf_pm_put_ns >> 12),
+		(unsigned long long)(total_ns >> 12));
+
+	atmel_qspi_perf_ops = 0;
+	atmel_qspi_perf_pm_get_ns = 0;
+	atmel_qspi_perf_cfg_ns = 0;
+	atmel_qspi_perf_xfer_ns = 0;
+	atmel_qspi_perf_pm_put_ns = 0;
+}
+
 static int atmel_qspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
 {
 	struct atmel_qspi *aq = spi_controller_get_devdata(mem->spi->controller);
+	const bool perf_page_read =
+		op->cmd.opcode == ATMEL_QSPI_PERF_PAGE_READ_OPCODE &&
+		op->addr.nbytes == 3 && !op->data.nbytes;
+	u64 t0 = 0, t1 = 0, t2 = 0, t3 = 0, t4 = 0;
 	u32 offset;
 	int err;
 
@@ -978,18 +1022,31 @@ static int atmel_qspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
 	if (op->addr.nbytes > 4)
 		return -EOPNOTSUPP;
 
+	if (perf_page_read)
+		t0 = ktime_get_mono_fast_ns();
+
 	err = pm_runtime_resume_and_get(&aq->pdev->dev);
+	if (perf_page_read)
+		t1 = ktime_get_mono_fast_ns();
 	if (err < 0)
 		return err;
 
 	err = aq->ops->set_cfg(aq, op, &offset);
+	if (perf_page_read)
+		t2 = ktime_get_mono_fast_ns();
 	if (err)
 		goto pm_runtime_put;
 
 	err = aq->ops->transfer(mem, op, offset);
+	if (perf_page_read)
+		t3 = ktime_get_mono_fast_ns();
 
 pm_runtime_put:
 	pm_runtime_put_autosuspend(&aq->pdev->dev);
+	if (perf_page_read) {
+		t4 = ktime_get_mono_fast_ns();
+		atmel_qspi_perf_account(t1 - t0, t2 - t1, t3 - t2, t4 - t3);
+	}
 	return err;
 }
 
