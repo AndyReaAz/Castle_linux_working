@@ -12,6 +12,7 @@
 #include <linux/device.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mtd/spinand.h>
 #include <linux/of.h>
@@ -19,6 +20,58 @@
 #include <linux/string.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi-mem.h>
+
+/*
+ * Temporary NextGen SPI-NAND read-path timing.
+ *
+ * Keep this local to the diagnostic branch.  The SPI-NAND MTD path is
+ * serialized by spinand->lock on this target, so simple counters are enough
+ * for the single-device performance test.  Report one average every 4096
+ * successfully completed page reads to keep printk overhead out of the test.
+ */
+#define SPINAND_PERF_BATCH_PAGES	4096
+
+static u64 spinand_perf_pages;
+static u64 spinand_perf_prep_ns;
+static u64 spinand_perf_load_ns;
+static u64 spinand_perf_wait_ns;
+static u64 spinand_perf_cache_ns;
+static u64 spinand_perf_finish_ns;
+
+static void spinand_perf_account(u64 prep_ns, u64 load_ns, u64 wait_ns,
+				 u64 cache_ns, u64 finish_ns)
+{
+	u64 total_ns;
+
+	spinand_perf_pages++;
+	spinand_perf_prep_ns += prep_ns;
+	spinand_perf_load_ns += load_ns;
+	spinand_perf_wait_ns += wait_ns;
+	spinand_perf_cache_ns += cache_ns;
+	spinand_perf_finish_ns += finish_ns;
+
+	if (spinand_perf_pages < SPINAND_PERF_BATCH_PAGES)
+		return;
+
+	total_ns = spinand_perf_prep_ns + spinand_perf_load_ns +
+		   spinand_perf_wait_ns + spinand_perf_cache_ns +
+		   spinand_perf_finish_ns;
+
+	pr_info("read-perf avg-ns/page prep=%llu load=%llu wait=%llu cache=%llu finish=%llu total=%llu\n",
+		(unsigned long long)(spinand_perf_prep_ns >> 12),
+		(unsigned long long)(spinand_perf_load_ns >> 12),
+		(unsigned long long)(spinand_perf_wait_ns >> 12),
+		(unsigned long long)(spinand_perf_cache_ns >> 12),
+		(unsigned long long)(spinand_perf_finish_ns >> 12),
+		(unsigned long long)(total_ns >> 12));
+
+	spinand_perf_pages = 0;
+	spinand_perf_prep_ns = 0;
+	spinand_perf_load_ns = 0;
+	spinand_perf_wait_ns = 0;
+	spinand_perf_cache_ns = 0;
+	spinand_perf_finish_ns = 0;
+}
 
 static int spinand_read_reg_op(struct spinand_device *spinand, u8 reg, u8 *val)
 {
@@ -570,14 +623,18 @@ static int spinand_read_page(struct spinand_device *spinand,
 			     const struct nand_page_io_req *req)
 {
 	struct nand_device *nand = spinand_to_nand(spinand);
+	u64 t0, t1, t2, t3, t4, t5;
 	u8 status;
 	int ret;
 
+	t0 = ktime_get_mono_fast_ns();
 	ret = nand_ecc_prepare_io_req(nand, (struct nand_page_io_req *)req);
+	t1 = ktime_get_mono_fast_ns();
 	if (ret)
 		return ret;
 
 	ret = spinand_load_page_op(spinand, req);
+	t2 = ktime_get_mono_fast_ns();
 	if (ret)
 		return ret;
 
@@ -585,16 +642,23 @@ static int spinand_read_page(struct spinand_device *spinand,
 			   SPINAND_READ_INITIAL_DELAY_US,
 			   SPINAND_READ_POLL_DELAY_US,
 			   &status);
+	t3 = ktime_get_mono_fast_ns();
 	if (ret < 0)
 		return ret;
 
 	spinand_ondie_ecc_save_status(nand, status);
 
 	ret = spinand_read_from_cache_op(spinand, req);
+	t4 = ktime_get_mono_fast_ns();
 	if (ret)
 		return ret;
 
-	return nand_ecc_finish_io_req(nand, (struct nand_page_io_req *)req);
+	ret = nand_ecc_finish_io_req(nand, (struct nand_page_io_req *)req);
+	t5 = ktime_get_mono_fast_ns();
+
+	spinand_perf_account(t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4);
+
+	return ret;
 }
 
 static int spinand_write_page(struct spinand_device *spinand,
