@@ -28,6 +28,24 @@ extern void atmel_ssc_config_done(struct snd_soc_dai *dai);
 #define ADS131A_CMD_START 0x00008800
 #define ADS131A_CMD_STOP 0x0000AA00
 
+#define ADS131A_REG_A_SYS_CFG 0x0b
+#define ADS131A_REG_CLK1      0x0d
+#define ADS131A_REG_CLK2      0x0e
+#define ADS131A_REG_ADC_ENA   0x0f
+
+/*
+ * NextGen supplies 24.576 MHz on XTAL1/CLKIN and operates the ADS131A in
+ * synchronous-master mode. CLK1 /2 therefore gives a 12.288 MHz ICLK/SCLK.
+ *
+ * High-resolution fMOD must not exceed 4.25 MHz. Use ICLK /4 so fMOD is
+ * 3.072 MHz, then select the OSR required for each PCM sample rate.
+ */
+#define ADS131A_CLK1_CLKIN_DIV2 0x02
+#define ADS131A_CLK2_ICLK_DIV4  0x40
+#define ADS131A_CLK2_OSR_32     0x0f
+#define ADS131A_CLK2_OSR_64     0x0d
+#define ADS131A_CLK2_OSR_192    0x0a
+
 #define ADS131A_RATES (SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_16000)
 #define ADS131A_FORMATS (SNDRV_PCM_FMTBIT_S32_LE | SNDRV_PCM_FMTBIT_S24_LE)
 
@@ -93,40 +111,64 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 	if (ret)
 		return ret;
 
-#define ADC_A_SYS_CFG 0x0b
-#define ADC_CLK1 0x0d
-#define ADC_CLK2 0x0e
-#define ADC_ENA 0x0f
+	ret = ads131a_write_reg(cpu_dai, ADS131A_REG_A_SYS_CFG, 0x78);
+	if (ret)
+		return ret;
 
-	ads131a_write_reg(cpu_dai, ADC_A_SYS_CFG,
-			  0x78); // high res mode, reserved, vref 4v, int
-	// ref en, fault threshold 0
-	if (params_rate(params) == 96000)
-		ads131a_write_reg(
-			cpu_dai, ADC_CLK2,
-			0x2d); // 96kHz sample rate (from 24.xxxMHz master clock  )	/ 64
-	else if (params_rate(params) == 48000)
-		ads131a_write_reg(
-			cpu_dai, ADC_CLK2,
-			0x2b); // 48kHz sample rate (from 24.xxxMHz master clock  )	/ 128
-	else if (params_rate(params) == 16000)
-		ads131a_write_reg(
-			cpu_dai, ADC_CLK2,
-			0x27); // 16kHz sample rate (from 24.xxxMHz master clock  )	/ 384
-	else
+	/*
+	 * Keep fMOD at 3.072 MHz for every supported output rate:
+	 *
+	 *   CLKIN  = 24.576 MHz
+	 *   CLK1   = /2  -> ICLK/SCLK = 12.288 MHz
+	 *   CLK2   = /4  -> fMOD      =  3.072 MHz
+	 *
+	 * The CLK2 OSR then selects 96/48/16 kHz without changing the
+	 * modulator clock.
+	 */
+	switch (params_rate(params)) {
+	case 96000:
+		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_CLK2,
+					ADS131A_CLK2_ICLK_DIV4 |
+					ADS131A_CLK2_OSR_32);
+		break;
+	case 48000:
+		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_CLK2,
+					ADS131A_CLK2_ICLK_DIV4 |
+					ADS131A_CLK2_OSR_64);
+		break;
+	case 16000:
+		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_CLK2,
+					ADS131A_CLK2_ICLK_DIV4 |
+					ADS131A_CLK2_OSR_192);
+		break;
+	default:
 		return -EINVAL;
+	}
+	if (ret)
+		return ret;
 
 	if (params_channels(params) == 2 || params_channels(params) == 3)
-		ads131a_write_reg(cpu_dai, ADC_ENA,				  0x03); // Enable first 2 channels only
+		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_ADC_ENA, 0x03);
 	else if (params_channels(params) == 4 || params_channels(params) == 5)
-		ads131a_write_reg(cpu_dai, ADC_ENA, 0x0f); // Enable all 4 channels */
+		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_ADC_ENA, 0x0f);
 	else
 		return -EINVAL;
+	if (ret)
+		return ret;
 
-	ret = ads131a_send_cmd(cpu_dai, 0x003300); // Wake up
-	// this speed up has to be the last write as we can't write to the ADC when
-	// it's running at 12MHz clock out
-	ads131a_write_reg(cpu_dai, ADC_CLK1, 0x02); // input clock / 2
+	ret = ads131a_send_cmd(cpu_dai, ADS131A_CMD_WAKEUP);
+	if (ret)
+		return ret;
+
+	/*
+	 * This must remain the final register write. In synchronous-master mode
+	 * CLK1 /2 makes the ADC drive SCLK at 12.288 MHz, after which the current
+	 * command path cannot reliably perform further configuration writes.
+	 */
+	ret = ads131a_write_reg(cpu_dai, ADS131A_REG_CLK1,
+				ADS131A_CLK1_CLKIN_DIV2);
+	if (ret)
+		return ret;
 
 	/*
          * Start conversions
