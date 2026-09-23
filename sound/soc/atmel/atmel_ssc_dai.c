@@ -1065,14 +1065,60 @@ CMR 00000000 RCMR 00000402 RFMR 01000297 TCMR 00000161 TFMR 01000097  SR 0000000
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_get_going_config);
 
-int atmel_ssc_transfer_word(struct snd_soc_dai *dai, u32 word,
-				   u32 *rx_word0, u32 *rx_word1)
+static int atmel_ssc_xfer_device_word(struct snd_soc_dai *dai,
+				      struct atmel_ssc_info *ssc_p,
+				      u32 tx, u32 *rx)
+{
+	int timeout = 100000;
+
+	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
+		if (!--timeout) {
+			dev_err(dai->dev, "%s TXRDY timeout\n", __func__);
+			return -ETIMEDOUT;
+		}
+		cpu_relax();
+	}
+
+	ssc_writel(ssc_p->ssc->regs, THR, tx);
+
+	timeout = 100000;
+	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
+		if (!--timeout) {
+			dev_err(dai->dev, "%s RXRDY timeout\n", __func__);
+			return -ETIMEDOUT;
+		}
+		cpu_relax();
+	}
+
+	if (rx)
+		*rx = ssc_readl(ssc_p->ssc->regs, RHR) & 0x00ffffff;
+	else
+		(void)ssc_readl(ssc_p->ssc->regs, RHR);
+
+	return 0;
+}
+
+/*
+ * Transfer one complete ADS131A command frame followed by one complete
+ * response frame.  In dynamic-frame mode the frame length changes when
+ * ADC_ENA changes, so command_words and response_words are deliberately
+ * separate.
+ */
+int atmel_ssc_transfer_frame(struct snd_soc_dai *dai, u32 command,
+			     unsigned int command_words,
+			     unsigned int response_words,
+			     u32 *response_status)
 {
 	struct platform_device *pdev = to_platform_device(dai->dev);
 	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
-	u32 rx[2] = { 0, 0 };
+	u32 rx;
+	unsigned int i;
 	int timeout;
-	int i;
+	int ret;
+
+	if (!command_words || command_words > 6 ||
+	    !response_words || response_words > 6)
+		return -EINVAL;
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_TXDIS) | SSC_BIT(CR_RXDIS));
 
@@ -1082,32 +1128,20 @@ int atmel_ssc_transfer_word(struct snd_soc_dai *dai, u32 word,
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN));
 
-	for (i = 0; i < ARRAY_SIZE(rx); i++) {
-		u32 tx = i == 0 ? word : 0;
+	for (i = 0; i < command_words; i++) {
+		ret = atmel_ssc_xfer_device_word(dai, ssc_p,
+						i ? 0 : command, NULL);
+		if (ret)
+			return ret;
+	}
 
-		timeout = 100000;
-		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
-			if (!--timeout) {
-				dev_err(dai->dev, "%s TXRDY timeout word=%d\n",
-					__func__, i);
-				return -ETIMEDOUT;
-			}
-			cpu_relax();
-		}
+	for (i = 0; i < response_words; i++) {
+		ret = atmel_ssc_xfer_device_word(dai, ssc_p, 0, &rx);
+		if (ret)
+			return ret;
 
-		ssc_writel(ssc_p->ssc->regs, THR, tx);
-
-		timeout = 100000;
-		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
-			if (!--timeout) {
-				dev_err(dai->dev, "%s RXRDY timeout word=%d\n",
-					__func__, i);
-				return -ETIMEDOUT;
-			}
-			cpu_relax();
-		}
-
-		rx[i] = ssc_readl(ssc_p->ssc->regs, RHR) & 0x00ffffff;
+		if (!i && response_status)
+			*response_status = rx;
 	}
 
 	timeout = 100000;
@@ -1119,18 +1153,13 @@ int atmel_ssc_transfer_word(struct snd_soc_dai *dai, u32 word,
 		cpu_relax();
 	}
 
-	if (rx_word0)
-		*rx_word0 = rx[0];
-	if (rx_word1)
-		*rx_word1 = rx[1];
-
 	return 0;
 }
-EXPORT_SYMBOL_GPL(atmel_ssc_transfer_word);
+EXPORT_SYMBOL_GPL(atmel_ssc_transfer_frame);
 
 int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
 {
-	return atmel_ssc_transfer_word(dai, word, NULL, NULL);
+	return atmel_ssc_transfer_frame(dai, word, 1, 1, NULL);
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_send_word);
 
