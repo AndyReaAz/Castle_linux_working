@@ -1702,6 +1702,16 @@ config TI_ADS1298
 	  This driver can also be built as a module. If so, the module will be
 	  called ti-ads1298.
 
+config TI_ADS131A
+	tristate "ADS131A driver"
+	depends on SND_SOC
+	depends on SND_ATMEL_SOC_SSC
+	depends on SPI
+	help
+	  Driver for the NextGen ADS131A capture path. This driver calls
+	  helper functions provided by the Atmel SSC ASoC DAI, so its
+	  built-in/module state must not exceed SND_ATMEL_SOC_SSC.
+
 config TI_ADS131E08
 	tristate "Texas Instruments ADS131E08"
 	depends on SPI

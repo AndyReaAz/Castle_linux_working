@@ -103,6 +103,11 @@ struct atmel_ssc_info {
 	struct atmel_pcm_dma_params *dma_params[2];
 	struct atmel_ssc_state ssc_state;
 	unsigned long mck_rate;
+
+	unsigned int tdm_slots;
+	unsigned int tdm_slot_width;
+	unsigned int tdm_rx_mask;
+	unsigned int tdm_tx_mask;
 };
 
 int atmel_ssc_set_audio(int ssc_id);

@@ -715,6 +715,15 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 	/* set SSC clock mode register */
 	ssc_writel(ssc_p->ssc->regs, CMR, cmr_div);
 
+	/*
+	 * NextGen ADS131A framing.  Keep the 6.18 DAMR/direct-path state,
+	 * but retain the register programming proven on the existing hardware.
+	 */
+	rcmr = 0x0402;
+	rfmr = 0x01000297;
+	tcmr = 0x0141;
+	tfmr = 0x01000097;
+
 	/* set receive clock mode and format */
 	ssc_writel(ssc_p->ssc->regs, RCMR, rcmr);
 	ssc_writel(ssc_p->ssc->regs, RFMR, rfmr);
@@ -725,6 +734,11 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 	/* set transmit clock mode and format */
 	ssc_writel(ssc_p->ssc->regs, TCMR, tcmr);
 	ssc_writel(ssc_p->ssc->regs, TFMR, tfmr);
+
+	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXDIS));
+	(void)ssc_readl(ssc_p->ssc->regs, SR);
+	while (ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))
+		(void)ssc_readl(ssc_p->ssc->regs, RHR);
 
 	pr_debug("atmel_ssc_dai,hw_params: SSC initialized\n");
 	return 0;
@@ -843,9 +857,27 @@ static int atmel_ssc_resume(struct snd_soc_component *component)
 	return 0;
 }
 
-/* S24_LE is not supported if more than 2 channels (of TDM slots) are used. */
+static int atmel_ssc_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
+				  unsigned int rx_mask, int slots,
+				  int slot_width)
+{
+	struct platform_device *pdev = to_platform_device(dai->dev);
+	int id = pdev->id;
+	struct atmel_ssc_info *ssc_p = &ssc_info[id];
+
+	ssc_p->tdm_slots = slots;
+	ssc_p->tdm_slot_width = slot_width;
+	ssc_p->tdm_rx_mask = rx_mask;
+	ssc_p->tdm_tx_mask = tx_mask;
+
+	pr_debug("%s TDM slots=%d width=%d rxmask=%x txmask=%x\n", __FUNCTION__,
+	       slots, slot_width, rx_mask, tx_mask);
+
+	return 0;
+}
+
 #define ATMEL_SSC_FORMATS (SNDRV_PCM_FMTBIT_S8     | SNDRV_PCM_FMTBIT_S16_LE |\
-			   SNDRV_PCM_FMTBIT_S32_LE)
+			   SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
 static const struct snd_soc_dai_ops atmel_ssc_dai_ops = {
 	.startup	= atmel_ssc_startup,
@@ -855,6 +887,7 @@ static const struct snd_soc_dai_ops atmel_ssc_dai_ops = {
 	.hw_params	= atmel_ssc_hw_params,
 	.set_fmt	= atmel_ssc_set_dai_fmt,
 	.set_clkdiv	= atmel_ssc_set_dai_clkdiv,
+	.set_tdm_slot	= atmel_ssc_set_tdm_slot,
 };
 
 static struct snd_soc_dai_driver atmel_ssc_dai = {
@@ -869,7 +902,7 @@ static struct snd_soc_dai_driver atmel_ssc_dai = {
 		.capture = {
 			.stream_name = "Capture",
 			.channels_min = 1,
-			.channels_max = 2,
+			.channels_max = 5,
 			.rates = SNDRV_PCM_RATE_CONTINUOUS,
 			.rate_min = 8000,
 			.rate_max = 384000,
@@ -938,6 +971,155 @@ void atmel_ssc_put_audio(int ssc_id)
 	ssc_free(ssc);
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_put_audio);
+
+void atmel_ssc_config_done(struct snd_soc_dai *dai);
+void atmel_ssc_config_done(struct snd_soc_dai *dai)
+{
+	struct platform_device *pdev = to_platform_device(dai->dev);
+	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
+	ssc_writel(ssc_p->ssc->regs, CR, (1 << SSC_CR_RXDIS_OFFSET));
+	ssc_writel(ssc_p->ssc->regs, CR, (1 << SSC_CR_TXDIS_OFFSET));
+}
+EXPORT_SYMBOL_GPL(atmel_ssc_config_done);
+
+void atmel_ssc_get_going_config(struct snd_soc_dai *dai);
+void atmel_ssc_get_going_config(struct snd_soc_dai *dai)
+{
+	struct platform_device *pdev = to_platform_device(dai->dev);
+	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
+
+	// make us a basic SPI port now
+	ssc_writel(ssc_p->ssc->regs, CR,
+		   (1 << SSC_CR_TXDIS_OFFSET) | (1 << SSC_CR_RXDIS_OFFSET));
+
+	ssc_writel(ssc_p->ssc->regs, RCMR,
+		   ((2) << SSC_RCMR_CKS_OFFSET) | (
+			(0) << SSC_RCMR_CKO_OFFSET) |
+			   ((0) << SSC_RCMR_CKI_OFFSET) |
+			   ((0) << SSC_RCMR_CKG_OFFSET) |
+			   ((4) << SSC_RCMR_START_OFFSET) |
+			   ((0) << SSC_RCMR_STOP_OFFSET) |
+			   ((0) << SSC_RCMR_STTDLY_OFFSET) |
+			   ((0) << SSC_RCMR_PERIOD_OFFSET));
+
+	ssc_writel(ssc_p->ssc->regs, RFMR,
+		   	   ((23) << SSC_RFMR_DATLEN_OFFSET) |
+			   ((0) << SSC_RFMR_LOOP_OFFSET) |
+			   ((1) << SSC_RFMR_MSBF_OFFSET) |
+			   ((0) << SSC_RFMR_DATNB_OFFSET) |
+			   ((0) << SSC_RFMR_FSLEN_OFFSET) |
+			   ((0) << SSC_RFMR_FSOS_OFFSET) |
+			   ((1) << SSC_RFMR_FSEDGE_OFFSET) |
+			   ((0) << SSC_RFMR_FSLEN_EXT_OFFSET));
+
+	/* Transmitter Configurations */
+
+	ssc_writel(ssc_p->ssc->regs, TCMR,
+		   ((1) << SSC_TCMR_CKS_OFFSET) | 
+		   ((0) << SSC_TCMR_CKO_OFFSET) |
+			   ((1) << SSC_TCMR_CKI_OFFSET) |
+			   ((0) << SSC_TCMR_CKG_OFFSET) |
+			   ((1) << SSC_TCMR_START_OFFSET) |
+			   ((0) << SSC_TCMR_STTDLY_OFFSET) |
+			   ((0) << SSC_TCMR_PERIOD_OFFSET));
+
+	ssc_writel(ssc_p->ssc->regs, TFMR,
+		   ((23) << SSC_TFMR_DATLEN_OFFSET) |
+			   ((0) << SSC_TFMR_DATDEF_OFFSET) |
+			   ((1) << SSC_TFMR_MSBF_OFFSET) |
+			   ((0) << SSC_TFMR_DATNB_OFFSET) |
+			   ((0) << SSC_TFMR_FSLEN_OFFSET) |
+			   ((0) << SSC_TFMR_FSOS_OFFSET) |
+			   ((0) << SSC_TFMR_FSDEN_OFFSET) |
+			   ((1) << SSC_TFMR_FSEDGE_OFFSET) |
+			   ((0) << SSC_TFMR_FSLEN_EXT_OFFSET));
+
+	// not used when SSC is in slave mode
+	ssc_writel(ssc_p->ssc->regs, CMR, 0);
+	/*
+    ssc_writel(ssc_p->ssc->regs,CR, SSC_BIT(CR_TXEN) | SSC_BIT(CR_RXEN));
+	
+		ssc_writel(ssc_p->ssc->regs,CR, SSC_BIT( CR_TXDIS));
+		msleep(1);
+
+		// set tx to send 1 word
+		ssc_writel(ssc_p->ssc->regs,TFMR, ( ssc_readl(ssc_p->ssc->regs,TFMR) & ~0x1F));
+		u32 U32 =  ssc_readl(ssc_p->ssc->regs,TCMR) ;
+		U32 &= ~ (((1<<SSC_TCMR_CKG_SIZE)-1)<<SSC_TCMR_CKG_OFFSET);
+		U32 |= SSC_BF ( TCMR_CKG,1);
+		ssc_writel(ssc_p->ssc->regs,TCMR,U32);
+		msleep(1);
+*/
+	/*		printk("%s  CMR %08X RCMR %08X RFMR %08X TCMR %08X TFMR %08X  SR %08X  IMR %08X\n",
+	       __FUNCTION__, ssc_readl(ssc_p->ssc->regs, CMR),
+	       ssc_readl(ssc_p->ssc->regs, RCMR),
+	       ssc_readl(ssc_p->ssc->regs, RFMR),
+	       ssc_readl(ssc_p->ssc->regs, TCMR),
+	       ssc_readl(ssc_p->ssc->regs, TFMR),
+	       ssc_readl(ssc_p->ssc->regs, SR),
+	       ssc_readl(ssc_p->ssc->regs, IMR));
+
+CMR 00000000 RCMR 00000402 RFMR 01000297 TCMR 00000161 TFMR 01000097  SR 00000000  IMR 00000000
+
+*/
+}
+EXPORT_SYMBOL_GPL(atmel_ssc_get_going_config);
+
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
+{
+	struct platform_device *pdev = to_platform_device(dai->dev);
+	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
+
+	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_TXDIS) | SSC_BIT(CR_RXDIS));
+
+	(void)ssc_readl(ssc_p->ssc->regs, SR);
+	while (ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))
+		(void)ssc_readl(ssc_p->ssc->regs, RHR);
+
+	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN));
+	u32 rx[10];
+	u32 tx[10];
+	int timeout, i = 0;
+
+	for (i = 0; i < 2; i++) {
+		rx[i] = 0;
+		u32 t = (i == 0) ? word  : 0;
+
+		timeout = 100000;
+		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
+			if (!--timeout) {
+				printk("%s txrdy timeout \n", __FUNCTION__);
+				goto timeout;
+			}
+			cpu_relax();
+		}
+
+		ssc_writel(ssc_p->ssc->regs, THR, t);
+		tx[i] = t;
+
+		timeout = 100000;
+		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
+			if (!--timeout) {
+				printk("%s rxrdy timeout \n", __FUNCTION__);
+				goto timeout;
+			}
+			cpu_relax();
+		}
+
+		rx[i] = ssc_readl(ssc_p->ssc->regs, RHR);
+	}
+
+	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY)))
+		cpu_relax();
+	// printk("%s TX %06X %06X RX %06X %06X\n", __FUNCTION__, tx[0], tx[1], rx[0], rx[1] );
+	return 0;
+timeout:
+	printk("%s timeout i=%d\n", __FUNCTION__, i);
+	return -1;
+}
+
+EXPORT_SYMBOL_GPL(atmel_ssc_send_word);
 
 /* Module information */
 MODULE_AUTHOR("Sedji Gaouaou, sedji.gaouaou@atmel.com, www.atmel.com");
