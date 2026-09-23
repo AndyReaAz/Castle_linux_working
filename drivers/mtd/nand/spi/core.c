@@ -10,6 +10,7 @@
 #define pr_fmt(fmt)	"spi-nand: " fmt
 
 #include <linux/device.h>
+#include <linux/delay.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
