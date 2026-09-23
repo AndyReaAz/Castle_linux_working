@@ -101,20 +101,9 @@ configure_fast()
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
-    # Reassert the NextGen boot-critical profile explicitly.  This avoids
-    # relying on old tristate values or renamed/defaulted symbols from 6.6.
-    for sym in ARCH_AT91 SOC_SAMA5D2 \
-               DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE \
-               BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC \
-               SPI SPI_MASTER SPI_ATMEL_QUADSPI \
-               MTD MTD_NAND_CORE MTD_SPI_NAND \
-               ATMEL_SSC SND SND_SOC SND_ATMEL_SOC_SSC \
-               SND_ATMEL_SOC_SSC_DMA SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        "$cfg" --file "$config" -e "$sym"
-    done
+    # Keep unchanged 6.6 symbol values/tristates for the first 6.18 baseline.
+    # olddefconfig will migrate them using the 6.18 Kconfig definitions.
+    # Only renamed symbols are translated explicitly below.
 
     # The 6.6 tree used CONFIG_WILC_SPI. Linux 6.18 uses the upstream-style
     # WILC1000 bus symbols. Keep SPI as a module because userspace deliberately
@@ -127,13 +116,20 @@ configure_fast()
 
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
 
+    # These were required built-in by the known-good 6.6 fast-boot profile.
     for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
                MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC SPI SPI_MASTER SPI_ATMEL_QUADSPI \
-               MTD MTD_NAND_CORE MTD_SPI_NAND ATMEL_SSC \
-               SND SND_SOC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA SND_AUDIO_GRAPH_CARD2 TI_ADS131A
+               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
+               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
     do
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
+    done
+
+    # Preserve the deployed NAND/QSPI tristate choice; for this migration
+    # baseline we only require that the paths were not lost by olddefconfig.
+    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND
+    do
+        grep -Eq "^CONFIG_${sym}=[ym]$" "$config" || die "CONFIG_${sym} did not remain enabled"
     done
 
     grep -q '^CONFIG_MODULES=y$' "$config" || die "CONFIG_MODULES is required for delayed WILC loading"
