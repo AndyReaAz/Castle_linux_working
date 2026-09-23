@@ -597,9 +597,16 @@ static int atmel_qspi_wait_for_completion(struct atmel_qspi *aq, u32 irq_mask)
 	int err = 0;
 	u32 sr;
 
-	/* Poll INSTRuction End status */
-	sr = atmel_qspi_read(aq, QSPI_SR);
-	if ((sr & irq_mask) == irq_mask)
+	/*
+	 * SAMA5D2 serial-memory commands normally complete in a few
+	 * microseconds. Going straight to the interrupt/completion path for
+	 * those short operations costs far more than the transfer itself on
+	 * this platform. Poll briefly first, then retain the existing interrupt
+	 * fallback for anything that does not complete promptly.
+	 */
+	err = readl_poll_timeout(aq->regs + QSPI_SR, sr,
+				 (sr & irq_mask) == irq_mask, 0, 20);
+	if (!err)
 		return 0;
 
 	/* Wait for INSTRuction End interrupt */
@@ -610,6 +617,8 @@ static int atmel_qspi_wait_for_completion(struct atmel_qspi *aq, u32 irq_mask)
 	if (!wait_for_completion_timeout(&aq->cmd_completion,
 					 msecs_to_jiffies(ATMEL_QSPI_TIMEOUT)))
 		err = -ETIMEDOUT;
+	else
+		err = 0;
 	atmel_qspi_write(irq_mask, aq, QSPI_IDR);
 
 	return err;
