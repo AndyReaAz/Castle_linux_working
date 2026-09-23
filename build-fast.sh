@@ -101,6 +101,11 @@ configure_fast()
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
 
+    # BASE_SMALL was an integer in 6.6 (0 == disabled) and is a bool in
+    # 6.18. Translate the deployed value explicitly to avoid a stale-config
+    # warning while preserving the same setting.
+    "$cfg" --file "$config" -d BASE_SMALL
+
     # Keep unchanged 6.6 symbol values/tristates for the first 6.18 baseline.
     # olddefconfig will migrate them using the 6.18 Kconfig definitions.
     # Only renamed symbols are translated explicitly below.
