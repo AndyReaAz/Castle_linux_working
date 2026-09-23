@@ -50,7 +50,7 @@ static void spinand_perf_account(u64 prep_ns, u64 load_ns, u64 wait_ns,
 		   spinand_perf_wait_ns + spinand_perf_cache_ns +
 		   spinand_perf_finish_ns;
 
-	pr_info("read-perf avg-ns/page prep=%llu load=%llu wait=%llu cache=%llu finish=%llu total=%llu\\n",
+	pr_info("read-perf avg-ns/page prep=%llu load=%llu wait=%llu cache=%llu finish=%llu total=%llu\n",
 		(unsigned long long)(spinand_perf_prep_ns >> 12),
 		(unsigned long long)(spinand_perf_load_ns >> 12),
 		(unsigned long long)(spinand_perf_wait_ns >> 12),
