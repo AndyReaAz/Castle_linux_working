@@ -498,17 +498,6 @@
 					atmel,drive-strength = <3>;
 				};
 				
-				pinctrl_qspi1_default: qspi1_default {
-					pinmux = <PIN_PB5__QSPI1_SCK>,
-					<PIN_PB6__QSPI1_CS>,
-					<PIN_PB7__QSPI1_IO0>,
-					<PIN_PB8__QSPI1_IO1>,
-					<PIN_PB9__QSPI1_IO2>,
-					<PIN_PB10__QSPI1_IO3>;
-					bias-disable;
-					atmel,drive-strength = <3>;
-				};
-				
 				pinctrl_uart1_default: uart1_default {
 					pinmux = <PIN_PD2__URXD1>,
 					<PIN_PD3__UTXD1>;
@@ -948,5 +937,22 @@
 		
 		power-supply = <&vddin_3v3>;
 		status = "okay";
+	};
+};
+
+
+/*
+ * The 6.18 SoM DTSI owns the QSPI1 pinmux.  Preserve the NextGen
+ * electrical settings without duplicating that pinctrl definition.
+ */
+&pinctrl_qspi1_default {
+	sck_cs {
+		atmel,drive-strength = <3>;
+	};
+
+	data {
+		/delete-property/ bias-pull-up;
+		bias-disable;
+		atmel,drive-strength = <3>;
 	};
 };
