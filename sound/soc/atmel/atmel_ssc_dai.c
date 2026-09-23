@@ -1065,11 +1065,14 @@ CMR 00000000 RCMR 00000402 RFMR 01000297 TCMR 00000161 TFMR 01000097  SR 0000000
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_get_going_config);
 
-int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
-int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
+int atmel_ssc_transfer_word(struct snd_soc_dai *dai, u32 word,
+				   u32 *rx_word0, u32 *rx_word1)
 {
 	struct platform_device *pdev = to_platform_device(dai->dev);
 	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
+	u32 rx[2] = { 0, 0 };
+	int timeout;
+	int i;
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_TXDIS) | SSC_BIT(CR_RXDIS));
 
@@ -1078,47 +1081,57 @@ int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
 		(void)ssc_readl(ssc_p->ssc->regs, RHR);
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN));
-	u32 rx[10];
-	u32 tx[10];
-	int timeout, i = 0;
 
-	for (i = 0; i < 2; i++) {
-		rx[i] = 0;
-		u32 t = (i == 0) ? word  : 0;
+	for (i = 0; i < ARRAY_SIZE(rx); i++) {
+		u32 tx = i == 0 ? word : 0;
 
 		timeout = 100000;
 		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
 			if (!--timeout) {
-				printk("%s txrdy timeout \n", __FUNCTION__);
-				goto timeout;
+				dev_err(dai->dev, "%s TXRDY timeout word=%d\n",
+					__func__, i);
+				return -ETIMEDOUT;
 			}
 			cpu_relax();
 		}
 
-		ssc_writel(ssc_p->ssc->regs, THR, t);
-		tx[i] = t;
+		ssc_writel(ssc_p->ssc->regs, THR, tx);
 
 		timeout = 100000;
 		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
 			if (!--timeout) {
-				printk("%s rxrdy timeout \n", __FUNCTION__);
-				goto timeout;
+				dev_err(dai->dev, "%s RXRDY timeout word=%d\n",
+					__func__, i);
+				return -ETIMEDOUT;
 			}
 			cpu_relax();
 		}
 
-		rx[i] = ssc_readl(ssc_p->ssc->regs, RHR);
+		rx[i] = ssc_readl(ssc_p->ssc->regs, RHR) & 0x00ffffff;
 	}
 
-	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY)))
+	timeout = 100000;
+	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY))) {
+		if (!--timeout) {
+			dev_err(dai->dev, "%s TXEMPTY timeout\n", __func__);
+			return -ETIMEDOUT;
+		}
 		cpu_relax();
-	// printk("%s TX %06X %06X RX %06X %06X\n", __FUNCTION__, tx[0], tx[1], rx[0], rx[1] );
-	return 0;
-timeout:
-	printk("%s timeout i=%d\n", __FUNCTION__, i);
-	return -1;
-}
+	}
 
+	if (rx_word0)
+		*rx_word0 = rx[0];
+	if (rx_word1)
+		*rx_word1 = rx[1];
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(atmel_ssc_transfer_word);
+
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
+{
+	return atmel_ssc_transfer_word(dai, word, NULL, NULL);
+}
 EXPORT_SYMBOL_GPL(atmel_ssc_send_word);
 
 /* Module information */
