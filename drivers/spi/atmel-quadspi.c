@@ -987,7 +987,7 @@ static void atmel_qspi_perf_account(u64 pm_get_ns, u64 cfg_ns,
 	total_ns = atmel_qspi_perf_pm_get_ns + atmel_qspi_perf_cfg_ns +
 		   atmel_qspi_perf_xfer_ns + atmel_qspi_perf_pm_put_ns;
 
-	pr_info("page-read perf avg-ns/op pm_get=%llu cfg=%llu xfer=%llu pm_put=%llu total=%llu\\n",
+	pr_info("page-read perf avg-ns/op pm_get=%llu cfg=%llu xfer=%llu pm_put=%llu total=%llu\n",
 		(unsigned long long)(atmel_qspi_perf_pm_get_ns >> 12),
 		(unsigned long long)(atmel_qspi_perf_cfg_ns >> 12),
 		(unsigned long long)(atmel_qspi_perf_xfer_ns >> 12),
