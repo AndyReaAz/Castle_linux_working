@@ -243,7 +243,7 @@
 			};
 			
 			macb0: ethernet@f8008000 {
-				status = "okay";
+				status = "disabled";
 				pinctrl-names = "default";
 				pinctrl-0 = <&pinctrl_gmac_default>;
 				#address-cells = <1>;
