@@ -17,7 +17,6 @@
 #include <linux/module.h>
 #include <linux/mtd/spinand.h>
 #include <linux/of.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/spi/spi.h>
@@ -790,14 +789,6 @@ read_retry:
 			if (ret < 0)
 				return ret;
 		}
-
-		/*
-		 * Large MTD reads can otherwise stay in this page loop for tens of
-		 * milliseconds.  The short NAND/QSPI polls deliberately busy-wait to
-		 * preserve flash throughput, so provide an explicit scheduling point
-		 * between pages for single-core latency-sensitive userspace.
-		 */
-		cond_resched();
 	}
 
 	if (ecc_failed && !ret)
@@ -864,8 +855,6 @@ static int spinand_mtd_continuous_page_read(struct mtd_info *mtd, loff_t from,
 
 		*max_bitflips = max_t(unsigned int, *max_bitflips, ret);
 		ret = 0;
-
-		cond_resched();
 	}
 
 end_cont_read:
