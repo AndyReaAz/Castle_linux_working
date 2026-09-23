@@ -106,9 +106,12 @@ configure_fast()
     # warning while preserving the same setting.
     "$cfg" --file "$config" -d BASE_SMALL
 
-    # Keep unchanged 6.6 symbol values/tristates for the first 6.18 baseline.
-    # olddefconfig will migrate them using the 6.18 Kconfig definitions.
-    # Only renamed symbols are translated explicitly below.
+    # Keep the flash controller/NAND path resident in the kernel.  MTD can
+    # exist from boot while any higher-level UBI attach/mount remains a
+    # separate userspace policy decision.  This also avoids module load/unload
+    # lifecycle differences while the 6.18 flash path is being stabilised.
+    "$cfg" --file "$config" -e SPI_ATMEL_QUADSPI
+    "$cfg" --file "$config" -e MTD_SPI_NAND
 
     # The 6.6 tree used CONFIG_WILC_SPI. Linux 6.18 uses the upstream-style
     # WILC1000 bus symbols. Keep SPI as a module because userspace deliberately
@@ -130,11 +133,11 @@ configure_fast()
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
     done
 
-    # Preserve the deployed NAND/QSPI tristate choice; for this migration
-    # baseline we only require that the paths were not lost by olddefconfig.
+    # QSPI and SPI-NAND are intentionally built in.  They are needed for the
+    # eventual on-board MTD path and should have one stable lifetime from boot.
     for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND
     do
-        grep -Eq "^CONFIG_${sym}=[ym]$" "$config" || die "CONFIG_${sym} did not remain enabled"
+        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
     done
 
     grep -q '^CONFIG_MODULES=y$' "$config" || die "CONFIG_MODULES is required for delayed WILC loading"
