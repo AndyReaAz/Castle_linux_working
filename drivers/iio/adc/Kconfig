@@ -1704,13 +1704,13 @@ config TI_ADS1298
 
 config TI_ADS131A
 	tristate "ADS131A driver"
+	depends on OF
 	depends on SND_SOC
 	depends on SND_ATMEL_SOC_SSC
-	depends on SPI
 	help
-	  Driver for the NextGen ADS131A capture path. This driver calls
-	  helper functions provided by the Atmel SSC ASoC DAI, so its
-	  built-in/module state must not exceed SND_ATMEL_SOC_SSC.
+	  Driver for the NextGen ADS131A capture path. This is a platform
+	  ASoC endpoint connected to the Atmel SSC through the DT audio graph.
+	  Its built-in/module state must not exceed SND_ATMEL_SOC_SSC.
 
 config TI_ADS131E08
 	tristate "Texas Instruments ADS131E08"
