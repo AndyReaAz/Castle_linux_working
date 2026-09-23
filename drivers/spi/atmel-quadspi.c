@@ -22,6 +22,7 @@
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
@@ -631,17 +632,33 @@ static int atmel_qspi_set_cfg(struct atmel_qspi *aq,
 
 static int atmel_qspi_wait_for_completion(struct atmel_qspi *aq, u32 irq_mask)
 {
+	ktime_t timeout;
+	u32 pending = 0;
 	int err = 0;
 	u32 sr;
 
-	/* Poll INSTRuction End status */
-	sr = atmel_qspi_read(aq, QSPI_SR);
-	if ((sr & irq_mask) == irq_mask)
-		return 0;
+	/*
+	 * SAMA5D2 serial-memory commands normally complete in a few
+	 * microseconds. Going straight to the interrupt/completion path for
+	 * those short operations costs far more than the transfer itself on
+	 * this platform.
+	 *
+	 * QSPI_SR is read-to-clear and INSTRE/CSR may be asserted separately,
+	 * so accumulate the requested status bits across reads. This mirrors
+	 * the polling logic used by the U-Boot Atmel QSPI driver.
+	 */
+	timeout = ktime_add_us(ktime_get(), 20);
+	do {
+		sr = atmel_qspi_read(aq, QSPI_SR);
+		pending |= sr & irq_mask;
+		if ((pending & irq_mask) == irq_mask)
+			return 0;
+		cpu_relax();
+	} while (ktime_before(ktime_get(), timeout));
 
-	/* Wait for INSTRuction End interrupt */
+	/* Wait for any completion bits that did not arrive during polling. */
 	reinit_completion(&aq->cmd_completion);
-	aq->pending = sr & irq_mask;
+	aq->pending = pending;
 	aq->irq_mask = irq_mask;
 	atmel_qspi_write(irq_mask, aq, QSPI_IER);
 	if (!wait_for_completion_timeout(&aq->cmd_completion,
