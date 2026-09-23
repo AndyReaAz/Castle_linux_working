@@ -120,9 +120,17 @@ configure_fast()
     "$cfg" --file "$config" -d WILC1000_SDIO
     "$cfg" --file "$config" -d WILC1000_HW_OOB_INTR
 
+    # NextGen has latency-sensitive acquisition/UI work.  Use the normal
+    # fully preemptible kernel model while retaining the deployed HZ=100.
+    "$cfg" --file "$config" -e PREEMPT
+    "$cfg" --file "$config" -d PREEMPT_NONE
+    "$cfg" --file "$config" -d PREEMPT_VOLUNTARY
+    "$cfg" --file "$config" -d PREEMPT_RT
+
     make_kernel olddefconfig
 
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
+    grep -q '^CONFIG_PREEMPT=y$' "$config" || die "CONFIG_PREEMPT did not resolve to y"
 
     # These were required built-in by the known-good 6.6 fast-boot profile.
     for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
