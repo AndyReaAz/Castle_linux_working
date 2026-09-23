@@ -18,7 +18,12 @@ description:
 
 properties:
   compatible:
-    const: atmel,sama5d2-classd
+    oneOf:
+      - items:
+          - const: atmel,sama5d2-classd
+      - items:
+          - const: microchip,sam9x7-classd
+          - const: atmel,sama5d2-classd
 
   reg:
     maxItems: 1
@@ -60,7 +65,7 @@ properties:
       - 10
       - 15
       - 20
-    default: 10
+    default: 20
     description:
       Set non-overlapping time, the unit is nanosecond(ns).
       Non-overlapping will be disabled if not specified.
@@ -96,5 +101,5 @@ examples:
         pinctrl-0 = <&pinctrl_classd_default>;
         atmel,model = "classd @ SAMA5D2-Xplained";
         atmel,pwm-type = "diff";
-        atmel,non-overlap-time = <10>;
+        atmel,non-overlap-time = <20>;
     };

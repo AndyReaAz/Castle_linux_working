@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2021 Cong Wang <cong.wang@bytedance.com> */
 
-#include <linux/skmsg.h>
 #include <linux/bpf.h>
-#include <net/sock.h>
+#include <linux/skmsg.h>
 #include <net/af_unix.h>
+
+#include "af_unix.h"
 
 #define unix_sk_has_data(__sk, __psock)					\
 		({	!skb_queue_empty(&__sk->sk_receive_queue) ||	\
@@ -53,6 +54,9 @@ static int unix_bpf_recvmsg(struct sock *sk, struct msghdr *msg,
 	struct unix_sock *u = unix_sk(sk);
 	struct sk_psock *psock;
 	int copied;
+
+	if (flags & MSG_OOB)
+		return -EOPNOTSUPP;
 
 	if (!len)
 		return 0;
@@ -181,6 +185,9 @@ int unix_stream_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool r
 	 */
 	if (!psock->sk_pair) {
 		sk_pair = unix_peer(sk);
+		if (unlikely(!sk_pair))
+			return -EINVAL;
+
 		sock_hold(sk_pair);
 		psock->sk_pair = sk_pair;
 	}

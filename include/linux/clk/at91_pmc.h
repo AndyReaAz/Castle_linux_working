@@ -47,8 +47,6 @@
 #define	AT91_PMC_PCSR		0x18			/* Peripheral Clock Status Register */
 
 #define AT91_PMC_PLL_ACR	0x18			/* PLL Analog Control Register [for SAM9X60] */
-#define		AT91_PMC_PLL_ACR_DEFAULT_UPLL	UL(0x12020010)	/* Default PLL ACR value for UPLL */
-#define		AT91_PMC_PLL_ACR_DEFAULT_PLLA	UL(0x00020010)	/* Default PLL ACR value for PLLA */
 #define		AT91_PMC_PLL_ACR_UTMIVR		(1 << 12)	/* UPLL Voltage regulator Control */
 #define		AT91_PMC_PLL_ACR_UTMIBG		(1 << 13)	/* UPLL Bandgap Control */
 
@@ -223,6 +221,11 @@
 #define AT91_PMC_ACC_CE		BIT(25)		/* ACC Enable */
 
 #define AT91_PMC_FSPR		0x74		/* Fast Startup Polarity Reg */
+
+#define AT91_PMC_WCR		0x74		/* Wake-up Control Register [SAMA7] */
+#define		AT91_PMC_WCR_EN		BIT(16)		/* Wake-up Control Enable */
+#define		AT91_PMC_WCR_POL	BIT(17)		/* Wake-up Control Input Polarity */
+#define		AT91_PMC_WCR_CMD	BIT(24)		/* Command (read=0, write=1) */
 
 #define AT91_PMC_FS_INPUT_MASK  0x7ff
 

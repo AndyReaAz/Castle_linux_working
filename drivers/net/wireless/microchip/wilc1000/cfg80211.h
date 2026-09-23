@@ -10,7 +10,7 @@
 
 int wilc_cfg80211_init(struct wilc **wilc, struct device *dev, int io_type,
 		       const struct wilc_hif_func *ops);
-struct wilc *wilc_create_wiphy(struct device *dev);
+int wilc_cfg80211_register(struct wilc *wilc);
 void wilc_deinit_host_int(struct net_device *net);
 int wilc_init_host_int(struct net_device *net);
 void wilc_wfi_monitor_rx(struct net_device *mon_dev, u8 *buff, u32 size);
@@ -21,10 +21,6 @@ struct net_device *wilc_wfi_init_mon_interface(struct wilc *wl,
 void wilc_update_mgmt_frame_registrations(struct wiphy *wiphy,
 					  struct wireless_dev *wdev,
 					  struct mgmt_frame_regs *upd);
-void wilc_sysfs_init(struct wilc *wilc);
-void wilc_sysfs_exit(void);
-struct wilc_vif *wilc_get_vif_from_type(struct wilc *wl, int type);
 struct wilc_vif *wilc_get_wl_to_vif(struct wilc *wl);
 void wlan_deinit_locks(struct wilc *wilc);
-struct wilc_vif *wilc_get_vif_from_type(struct wilc *wl, int type);
 #endif

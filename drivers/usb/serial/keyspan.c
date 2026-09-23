@@ -921,7 +921,6 @@ static void usa28_indat_callback(struct urb *urb)
 
 	port =  urb->context;
 	p_priv = usb_get_serial_port_data(port);
-	data = urb->transfer_buffer;
 
 	if (urb != p_priv->in_urbs[p_priv->in_flip])
 		return;
@@ -1188,6 +1187,10 @@ static void usa49wg_indat_callback(struct urb *urb)
 	len = 0;
 
 	while (i < urb->actual_length) {
+		if (urb->actual_length - i < 3) {
+			dev_warn_ratelimited(&urb->dev->dev, "malformed indat packet\n");
+			break;
+		}
 
 		/* Check port number from message */
 		if (data[i] >= serial->num_ports) {
@@ -3002,7 +3005,6 @@ static void keyspan_port_remove(struct usb_serial_port *port)
 /* Structs for the devices, pre and post renumeration. */
 static struct usb_serial_driver keyspan_pre_device = {
 	.driver = {
-		.owner		= THIS_MODULE,
 		.name		= "keyspan_no_firm",
 	},
 	.description		= "Keyspan - (without firmware)",
@@ -3013,7 +3015,6 @@ static struct usb_serial_driver keyspan_pre_device = {
 
 static struct usb_serial_driver keyspan_1port_device = {
 	.driver = {
-		.owner		= THIS_MODULE,
 		.name		= "keyspan_1",
 	},
 	.description		= "Keyspan 1 port adapter",
@@ -3037,7 +3038,6 @@ static struct usb_serial_driver keyspan_1port_device = {
 
 static struct usb_serial_driver keyspan_2port_device = {
 	.driver = {
-		.owner		= THIS_MODULE,
 		.name		= "keyspan_2",
 	},
 	.description		= "Keyspan 2 port adapter",
@@ -3061,7 +3061,6 @@ static struct usb_serial_driver keyspan_2port_device = {
 
 static struct usb_serial_driver keyspan_4port_device = {
 	.driver = {
-		.owner		= THIS_MODULE,
 		.name		= "keyspan_4",
 	},
 	.description		= "Keyspan 4 port adapter",

@@ -807,7 +807,7 @@ void dm_kcopyd_copy(struct dm_kcopyd_client *kc, struct dm_io_region *from,
 	 */
 	if (!(job->flags & BIT(DM_KCOPYD_WRITE_SEQ))) {
 		for (i = 0; i < job->num_dests; i++) {
-			if (bdev_zoned_model(dests[i].bdev) == BLK_ZONED_HM) {
+			if (bdev_is_zoned(dests[i].bdev)) {
 				job->flags |= BIT(DM_KCOPYD_WRITE_SEQ);
 				break;
 			}
@@ -934,7 +934,8 @@ struct dm_kcopyd_client *dm_kcopyd_client_create(struct dm_kcopyd_throttle *thro
 		goto bad_slab;
 
 	INIT_WORK(&kc->kcopyd_work, do_work);
-	kc->kcopyd_wq = alloc_workqueue("kcopyd", WQ_MEM_RECLAIM, 0);
+	kc->kcopyd_wq = alloc_workqueue("kcopyd", WQ_MEM_RECLAIM | WQ_PERCPU,
+					0);
 	if (!kc->kcopyd_wq) {
 		r = -ENOMEM;
 		goto bad_workqueue;

@@ -48,8 +48,8 @@
 #define PDMA_ERR_STATUS_MASK				GENMASK(31, 31)
 
 /* Transfer Type */
-#define PDMA_FULL_SPEED					0xFF000008
-#define NO_STRICT_ORDERING				BIT(3)
+#define PDMA_FULL_SPEED					0xFF000000
+#define PDMA_STRICT_ORDERING				BIT(3)
 
 /* Error Recovery */
 #define MAX_RETRY					1
@@ -115,7 +115,7 @@ struct sf_pdma {
 	void __iomem            *mappedbase;
 	u32			transfer_type;
 	u32			n_chans;
-	struct sf_pdma_chan	chans[];
+	struct sf_pdma_chan	chans[] __counted_by(n_chans);
 };
 
 struct sf_pdma_driver_platdata {

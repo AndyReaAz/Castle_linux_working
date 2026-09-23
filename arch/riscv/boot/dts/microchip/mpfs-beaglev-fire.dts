@@ -4,11 +4,12 @@
 /dts-v1/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 #include "mpfs.dtsi"
 #include "mpfs-beaglev-fire-fabric.dtsi"
 
-/* Clock frequency (in Hz) of the rtcclk */
-#define RTCCLK_FREQ		1000000
+/* Clock frequency (in Hz) of MTIMER */
+#define MTIMER_FREQ		1000000
 
 / {
 	#address-cells = <2>;
@@ -30,6 +31,8 @@
 		serial2 = &mmuart2;
 		serial3 = &mmuart3;
 		serial4 = &mmuart4;
+		mmc0 = &mmc;
+		mmc1 = &sdmmc;
 	};
 
 	chosen {
@@ -37,7 +40,7 @@
 	};
 
 	cpus {
-		timebase-frequency = <RTCCLK_FREQ>;
+		timebase-frequency = <MTIMER_FREQ>;
 	};
 
 	kernel: memory@80000000 {
@@ -80,7 +83,6 @@
 			compatible = "shared-dma-pool";
 			size = <0x0 0x4000000>;
 			no-map;
-			linux,dma-default;
 			alloc-ranges = <0x0 0xc4000000 0x0 0x4000000>;
 		};
 
@@ -93,6 +95,12 @@
 		};
 	};
 
+	imx219_clk: camera-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
 	imx219_vana: fixedregulator-0 {
 		compatible = "regulator-fixed";
 		regulator-name = "imx219_vana";
@@ -100,46 +108,36 @@
 		regulator-max-microvolt = <2800000>;
 	};
 
-	imx219_vdig: fixedregulator-1 {
+	imx219_vdig: regulator-1v8 {
 		compatible = "regulator-fixed";
 		regulator-name = "imx219_vdig";
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 	};
 
-	imx219_vddl: fixedregulator-2 {
+	imx219_vddl: regulator-1v2 {
 		compatible = "regulator-fixed";
 		regulator-name = "imx219_vddl";
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <1200000>;
 	};
-
-	imx219_clk: camera-clk {
-		compatible = "fixed-clock";
-		#clock-cells = <0>;
-		clock-frequency = <24000000>;
+	
+	regulator-1v8-syzygy {
+		compatible = "regulator-fixed";
+		gpios = <&gpio2 30 GPIO_ACTIVE_HIGH>;
+		regulator-name = "syzygy_1v8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		enable-active-high;
 	};
 };
 
 &gpio0 {
-	ngpios=<14>;
+	ngpios = <14>;
 	gpio-line-names = "", "", "", "", "", "", "",
 			  "", "", "", "", "", "SD_CARD_CS", "USER_BUTTON";
 	status = "okay";
-
-	sd-card-cs-hog {
-		gpio-hog;
-		gpios = <12 12>;
-		output-high;
-		line-name = "SD_CARD_CS";
-	};
-
-	user-button-hog {
-		gpio-hog;
-		gpios = <13 13>;
-		input;
-		line-name = "USER_BUTTON";
-	};
 };
 
 &gpio1 {
@@ -148,24 +146,9 @@
 			  "", "", "", "", "", "", "", "", "", "",
 			  "ADC_IRQn", "", "", "USB_OCn";
 	status = "okay";
-
-	adc-irqn-hog {
-		gpio-hog;
-		gpios = <20 20>;
-		input;
-		line-name = "ADC_IRQn";
-	};
-
-	usb-ocn-hog {
-		gpio-hog;
-		gpios = <23 23>;
-		input;
-		line-name = "USB_OCn";
-	};
 };
 
 &gpio2 {
-	ngpios=<32>;
 	gpio-line-names = "P8_PIN3_USER_LED_0", "P8_PIN4_USER_LED_1", "P8_PIN5_USER_LED_2",
 			  "P8_PIN6_USER_LED_3", "P8_PIN7_USER_LED_4", "P8_PIN8_USER_LED_5",
 			  "P8_PIN9_USER_LED_6", "P8_PIN10_USER_LED_7", "P8_PIN11_USER_LED_8",
@@ -175,20 +158,6 @@
 			  "P8_PIN27", "P8_PIN28", "P8_PIN29", "P8_PIN30", "M2_W_DISABLE1",
 			  "M2_W_DISABLE2", "VIO_ENABLE", "SD_DET";
 	status = "okay";
-
-	vio-enable-hog {
-		gpio-hog;
-		gpios = <30 30>;
-		output-high;
-		line-name = "VIO_ENABLE";
-	};
-
-	sd-det-hog {
-		gpio-hog;
-		gpios = <31 31>;
-		input;
-		line-name = "SD_DET";
-	};
 };
 
 &i2c0 {
@@ -199,7 +168,7 @@
 	status = "okay";
 
 	eeprom: eeprom@50 {
-		compatible = "at,24c32";
+		compatible = "atmel,24c32";
 		reg = <0x50>;
 	};
 
@@ -278,6 +247,83 @@
 	status = "okay";
 };
 
+&qspi {
+	status = "okay";
+	cs-gpios = <&gpio1 17 GPIO_ACTIVE_LOW>, <&gpio0 12 GPIO_ACTIVE_LOW>;
+	num-cs = <2>;
+
+	adc@0 {
+		compatible = "microchip,mcp3464r";
+		reg = <0>; /* CE0 */
+		spi-cpol;
+		spi-cpha;
+		spi-max-frequency = <5000000>;
+		microchip,hw-device-address = <1>;
+		interrupts-extended = <&gpio1 20 IRQ_TYPE_LEVEL_LOW>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		channel@0 {
+			/* CH0 to AGND */
+			reg = <0>;
+			label = "CH0";
+		};
+
+		channel@1 {
+			/* CH1 to AGND */
+			reg = <1>;
+			label = "CH1";
+		};
+
+		channel@2 {
+			/* CH2 to AGND */
+			reg = <2>;
+			label = "CH2";
+		};
+
+		channel@3 {
+			/* CH3 to AGND */
+			reg = <3>;
+			label = "CH3";
+		};
+
+		channel@4 {
+			/* CH4 to AGND */
+			reg = <4>;
+			label = "CH4";
+		};
+
+		channel@5 {
+			/* CH5 to AGND */
+			reg = <5>;
+			label = "CH5";
+		};
+
+		channel@6 {
+			/* CH6 to AGND */
+			reg = <6>;
+			label = "CH6";
+		};
+
+		channel@7 {
+			/* CH7 is connected to AGND */
+			reg = <7>;
+			label = "CH7";
+		};
+	};
+
+	sdmmc: mmc@1 {
+		compatible = "mmc-spi-slot";
+		reg = <1>;
+		cd-gpios = <&gpio2 31 GPIO_ACTIVE_LOW>;
+		voltage-ranges = <3300 3300>;
+		spi-max-frequency = <5000000>;
+		disable-wp;
+	};
+};
+
+
 &syscontroller {
 	microchip,bitstream-flash = <&sys_ctrl_flash>;
 	status = "okay";
@@ -300,4 +346,8 @@
 	dma-noncoherent;
 	status = "okay";
 	dr_mode = "otg";
+};
+
+&wdt1 {
+	status = "okay";
 };

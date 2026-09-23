@@ -69,7 +69,9 @@ static void sun4i_backend_disable_color_correction(struct sunxi_engine *engine)
 			   SUN4I_BACKEND_OCCTL_ENABLE, 0);
 }
 
-static void sun4i_backend_commit(struct sunxi_engine *engine)
+static void sun4i_backend_commit(struct sunxi_engine *engine,
+				 struct drm_crtc *crtc,
+				 struct drm_atomic_state *state)
 {
 	DRM_DEBUG_DRIVER("Committing changes\n");
 
@@ -488,6 +490,9 @@ static int sun4i_backend_atomic_check(struct sunxi_engine *engine,
 	drm_for_each_plane_mask(plane, drm, crtc_state->plane_mask) {
 		struct drm_plane_state *plane_state =
 			drm_atomic_get_plane_state(state, plane);
+		if (IS_ERR(plane_state))
+			return PTR_ERR(plane_state);
+
 		struct sun4i_layer_state *layer_state =
 			state_to_sun4i_layer_state(plane_state);
 		struct drm_framebuffer *fb = plane_state->fb;
@@ -875,7 +880,8 @@ static int sun4i_backend_bind(struct device *dev, struct device *master,
 						     &sun4i_backend_regmap_config);
 	if (IS_ERR(backend->engine.regs)) {
 		dev_err(dev, "Couldn't create the backend regmap\n");
-		return PTR_ERR(backend->engine.regs);
+		ret = PTR_ERR(backend->engine.regs);
+		goto err_disable_ram_clk;
 	}
 
 	list_add_tail(&backend->engine.list, &drv->engine_list);
@@ -1026,7 +1032,7 @@ MODULE_DEVICE_TABLE(of, sun4i_backend_of_table);
 
 static struct platform_driver sun4i_backend_platform_driver = {
 	.probe		= sun4i_backend_probe,
-	.remove_new	= sun4i_backend_remove,
+	.remove		= sun4i_backend_remove,
 	.driver		= {
 		.name		= "sun4i-backend",
 		.of_match_table	= sun4i_backend_of_table,

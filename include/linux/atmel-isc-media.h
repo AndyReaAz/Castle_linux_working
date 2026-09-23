@@ -53,6 +53,37 @@ enum atmel_isc_ctrl_id {
 	ISC_CID_GR_OFFSET,
 	/* Green Blue component offset control */
 	ISC_CID_GB_OFFSET,
+	/* Color correction registers */
+	ISC_CID_CC_RR,
+	ISC_CID_CC_RG,
+	ISC_CID_CC_RB,
+	ISC_CID_CC_OR,
+	ISC_CID_CC_GR,
+	ISC_CID_CC_GG,
+	ISC_CID_CC_GB,
+	ISC_CID_CC_OG,
+	ISC_CID_CC_BR,
+	ISC_CID_CC_BG,
+	ISC_CID_CC_BB,
+	ISC_CID_CC_OB,
+
+	/*
+	 * Per-channel gamma LUT override controls.
+	 *
+	 * Each control is a 64-element U32 array.  Element i holds the
+	 * desired 10-bit output value (0–1023) for sensor input values in
+	 * the range [i*16 .. (i+1)*16 - 1].  The driver converts the
+	 * simple linear array to the hardware piecewise-linear (bipartite)
+	 * register format internally.
+	 *
+	 * Setting any of these controls activates the custom LUT for all
+	 * three channels and overrides the preset curve selected by
+	 * V4L2_CID_GAMMA.  Writing V4L2_CID_GAMMA deactivates the custom
+	 * LUT and restores the selected preset curve.
+	 */
+	ISC_CID_GAMMA_B_LUT,
+	ISC_CID_GAMMA_G_LUT,
+	ISC_CID_GAMMA_R_LUT,
 };
 
 #endif

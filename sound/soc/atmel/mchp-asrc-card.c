@@ -149,7 +149,7 @@ static int mchp_asrc_card_add_rtm_route(struct snd_soc_card *card,
 		bool codec_capture_avail = false;
 
 		for (j = 0; j < rtd->dai_link->num_codecs; j++) {
-			struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, j);
+			struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, j);
 
 			if (codec_dai->driver->playback.stream_name)
 				codec_playback_avail = true;
@@ -316,7 +316,7 @@ static int mchp_asrc_card_late_probe(struct snd_soc_card *card)
 
 static int mchp_asrc_card_be_dai_link_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_card *card = rtd->card;
 	struct mchp_card_priv *card_priv = snd_soc_card_get_drvdata(card);
 	int i;
@@ -329,7 +329,7 @@ static int mchp_asrc_card_be_dai_link_init(struct snd_soc_pcm_runtime *rtd)
 		dev_dbg(card->dev, "%s: no prefix for DAI %s\n", __func__, cpu_dai->name);
 
 	for (i = 0; i < rtd->dai_link->num_codecs; i++) {
-		struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, i);
+		struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, i);
 
 		if (codec_dai->driver->playback.stream_name)
 			codec_playback_avail = true;
@@ -384,7 +384,7 @@ static int mchp_asoc_card_fixup(struct snd_soc_pcm_runtime *rtd, struct snd_pcm_
 
 static int mchp_asrc_card_dai_link_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai_link *dai_link = rtd->dai_link;
 	struct snd_soc_card *card = rtd->card;
 	unsigned int i;
@@ -420,21 +420,23 @@ static int mchp_asrc_card_dai_link_init(struct snd_soc_pcm_runtime *rtd)
 	}
 
 	for (i = 0; i < rtd->dai_link->num_codecs; i++) {
-		struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, i);
+		struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, i);
 
 		/* Mikroe Proto Board uses a 12.288MhZ XTAL */
 		if (strstr(codec_dai->driver->name, "wm8731")) {
 			dev_dbg(card->dev, "setting sysclk for %s\n",
 				codec_dai->driver->name);
-			err = snd_soc_dai_set_sysclk(codec_dai, WM8731_SYSCLK_XTAL,
-						     XTAL_RATE, SND_SOC_CLOCK_IN);
+			err = snd_soc_dai_set_sysclk(codec_dai,
+						     WM8731_SYSCLK_XTAL,
+						     XTAL_RATE,
+						     SND_SOC_CLOCK_IN);
 			if (err < 0) {
 				dev_err(card->dev, "Failed to set WM8731 SYSCLK: %d\n",
 					err);
 			}
 		}
 		if (priv->codec.slots) {
-			dev_info(card->dev, "Setting TDM slot %d, width %d in %s node\n",
+			dev_dbg(card->dev, "Setting TDM slot %d, width %d in %s node\n",
 				 priv->codec.slots, priv->codec.slot_width,
 				 codec_dai->name);
 			err = snd_soc_dai_set_tdm_slot(codec_dai,
@@ -451,7 +453,8 @@ static int mchp_asrc_card_dai_link_init(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
-static int mchp_asoc_card_parse_convert(struct device *dev, struct device_node *np,
+static int mchp_asoc_card_parse_convert(struct device *dev,
+					struct device_node *np,
 					char *prefix,
 					struct mchp_dai_link_priv *priv)
 {
@@ -473,7 +476,8 @@ static int mchp_asoc_card_parse_convert(struct device *dev, struct device_node *
 			prefix, np->full_name, priv->convert_rate);
 		return -EINVAL;
 	}
-	dev_dbg(dev, "convert-rate for %s: %d\n", np->full_name, priv->convert_rate);
+	dev_dbg(dev, "convert-rate for %s: %d\n", np->full_name,
+							priv->convert_rate);
 
 	/* channels transfer */
 	snprintf(prop, sizeof(prop), "%s%s", prefix, "convert-channels");
@@ -495,7 +499,8 @@ static int mchp_asoc_card_parse_convert(struct device *dev, struct device_node *
 	snprintf(prop, sizeof(prop), "%s%s", prefix, "convert-sample-format");
 	ret = of_property_read_u32(np, prop, &priv->convert_format);
 	if (ret < 0) {
-		dev_err(dev, "unable to get convert-sample-format for %s", np->full_name);
+		dev_err(dev, "unable to get convert-sample-format for %s",
+								np->full_name);
 		return ret;
 	}
 	if (priv->convert_format != MCHP_ASRC_PCM_FORMAT_S8 &&
@@ -658,10 +663,8 @@ static int mchp_asrc_card_probe(struct platform_device *pdev)
 		dai_link->num_codecs = 1;
 		dai_link->num_platforms = 1;
 
-		dai_link->dpcm_playback = 1;
-		dai_link->dpcm_capture = 1;
 		dai_link->dynamic = 1;
-		dai_link->dpcm_loopback = 1;
+		dai_link->dpcm_loopback = 1;  // ATENTIE
 		dai_link->id = card->num_links;
 		dai_link->trigger[SNDRV_PCM_STREAM_PLAYBACK] =
 			dai_link->trigger[SNDRV_PCM_STREAM_CAPTURE] = SND_SOC_DPCM_TRIGGER_PRE;
@@ -717,7 +720,7 @@ static int mchp_asrc_card_probe(struct platform_device *pdev)
 			continue;
 		}
 		mchp_parse_tdm_params(&pdev->dev, codec, &priv->dai_link[be_index].codec);
-		err = asoc_simple_parse_daifmt(&pdev->dev, node, codec, PREFIX,
+		err = simple_util_parse_daifmt(&pdev->dev, node, codec, PREFIX,
 					       &dai_link->dai_fmt);
 		if (err < 0) {
 			of_node_put(codec);
@@ -803,7 +806,7 @@ static int mchp_asrc_card_probe(struct platform_device *pdev)
 		err = mchp_asoc_card_parse_convert(&pdev->dev, node, PREFIX,
 						   &priv->dai_link[be_index]);
 		if (err) {
-			dev_info(&pdev->dev, "not registering DAI %s as BE\n",
+			dev_err(&pdev->dev, "not registering DAI %s as BE\n",
 				 (dai_link - 1)->name);
 		}
 		if (!asrc_fe_no || err) {
@@ -829,14 +832,11 @@ static int mchp_asrc_card_probe(struct platform_device *pdev)
 			dai_link->trigger[SNDRV_PCM_STREAM_CAPTURE] = SND_SOC_DPCM_TRIGGER_POST;
 
 		if (strstr(name, "spdiftx")) {
-			dai_link->dpcm_playback = 1;
+			dai_link->playback_only = 1;
 		} else if (strstr(name, "spdifrx")) {
-			dai_link->dpcm_capture = 1;
+			dai_link->capture_only = 1;
 		} else if (strstr(name, "pdmc")) {
-			dai_link->dpcm_capture = 1;
-		} else {
-			dai_link->dpcm_playback = 1;
-			dai_link->dpcm_capture = 1;
+			dai_link->capture_only = 1;
 		}
 		dai_link->be_hw_params_fixup = mchp_asoc_card_fixup;
 		dev_info(&pdev->dev, "Found DPCM BE: %s, id %d\n",
@@ -886,13 +886,12 @@ _dai_link_put:
 	return err;
 }
 
-static int mchp_asrc_card_remove(struct platform_device *pdev)
+static void mchp_asrc_card_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
 	snd_soc_unregister_card(card);
 
-	return 0;
 }
 
 static const struct of_device_id mchp_asrc_card_of_match[] = {

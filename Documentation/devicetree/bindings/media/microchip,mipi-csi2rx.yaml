@@ -19,9 +19,11 @@ description:
 
 properties:
   compatible:
-    items:
-      - enum:
-          - microchip,mipi-csi2-rx-rtl-v0
+    oneOf:
+      - items:
+          - const: microchip,pic64gx-mipi-csi2-rx
+          - const: microchip,mipi-csi2-rx-rtl-v0
+      - const: microchip,mipi-csi2-rx-rtl-v0
 
   reg:
     maxItems: 1
@@ -82,6 +84,7 @@ properties:
                   1 2     - For 2 lanes enabled in IP.
                   1 2 3   - For 3 lanes enabled in IP.
                   1 2 3 4 - For 4 lanes enabled in IP.
+                minItems: 1
                 items:
                   - const: 1
                   - const: 2
@@ -113,7 +116,7 @@ additionalProperties: false
 examples:
   - |
     mcsi2rx_0: csi2rx@50020000 {
-        compatible = "microchip,mipi-csi2-rx";
+        compatible = "microchip,mipi-csi2-rx-rtl-v0";
         reg = <0x50020000 0x10000>;
         interrupt-parent = <&plic>;
         interrupts = <120>;

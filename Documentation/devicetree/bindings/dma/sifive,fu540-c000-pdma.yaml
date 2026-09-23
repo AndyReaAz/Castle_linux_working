@@ -29,10 +29,12 @@ properties:
   compatible:
     oneOf:
       - items:
-          - const: microchip,mpfs-pdma # Microchip out of order DMA transfer
-          - const: sifive,fu540-c000-pdma # Sifive in-order DMA transfer
+          - const: microchip,pic64gx-pdma
+          - const: microchip,mpfs-pdma
+          - const: sifive,pdma0
       - items:
           - enum:
+              - microchip,mpfs-pdma
               - sifive,fu540-c000-pdma
           - const: sifive,pdma0
     description:

@@ -1254,7 +1254,8 @@ static int atmel_sha_cra_init(struct crypto_tfm *tfm)
 static void atmel_sha_alg_init(struct ahash_alg *alg)
 {
 	alg->halg.base.cra_priority = ATMEL_SHA_PRIORITY;
-	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC;
+	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC |
+				   CRYPTO_ALG_KERN_DRIVER_ONLY;
 	alg->halg.base.cra_ctxsize = sizeof(struct atmel_sha_ctx);
 	alg->halg.base.cra_module = THIS_MODULE;
 	alg->halg.base.cra_init = atmel_sha_cra_init;
@@ -1300,7 +1301,6 @@ static struct ahash_alg sha_384_512_algs[] = {
 	.halg.base.cra_name		= "sha384",
 	.halg.base.cra_driver_name	= "atmel-sha384",
 	.halg.base.cra_blocksize	= SHA384_BLOCK_SIZE,
-	.halg.base.cra_alignmask	= 0x3,
 
 	.halg.digestsize = SHA384_DIGEST_SIZE,
 },
@@ -1308,7 +1308,6 @@ static struct ahash_alg sha_384_512_algs[] = {
 	.halg.base.cra_name		= "sha512",
 	.halg.base.cra_driver_name	= "atmel-sha512",
 	.halg.base.cra_blocksize	= SHA512_BLOCK_SIZE,
-	.halg.base.cra_alignmask	= 0x3,
 
 	.halg.digestsize = SHA512_DIGEST_SIZE,
 },
@@ -2043,7 +2042,8 @@ static void atmel_sha_hmac_cra_exit(struct crypto_tfm *tfm)
 static void atmel_sha_hmac_alg_init(struct ahash_alg *alg)
 {
 	alg->halg.base.cra_priority = ATMEL_SHA_PRIORITY;
-	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC;
+	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC |
+				   CRYPTO_ALG_KERN_DRIVER_ONLY;
 	alg->halg.base.cra_ctxsize = sizeof(struct atmel_sha_hmac_ctx);
 	alg->halg.base.cra_module = THIS_MODULE;
 	alg->halg.base.cra_init	= atmel_sha_hmac_cra_init;
@@ -2418,27 +2418,23 @@ EXPORT_SYMBOL_GPL(atmel_sha_authenc_abort);
 
 static void atmel_sha_unregister_algs(struct atmel_sha_dev *dd)
 {
-	int i;
-
 	if (dd->caps.has_hmac)
-		for (i = 0; i < ARRAY_SIZE(sha_hmac_algs); i++)
-			crypto_unregister_ahash(&sha_hmac_algs[i]);
+		crypto_unregister_ahashes(sha_hmac_algs,
+					  ARRAY_SIZE(sha_hmac_algs));
 
-	for (i = 0; i < ARRAY_SIZE(sha_1_256_algs); i++)
-		crypto_unregister_ahash(&sha_1_256_algs[i]);
+	crypto_unregister_ahashes(sha_1_256_algs, ARRAY_SIZE(sha_1_256_algs));
 
 	if (dd->caps.has_sha224)
 		crypto_unregister_ahash(&sha_224_alg);
 
-	if (dd->caps.has_sha_384_512) {
-		for (i = 0; i < ARRAY_SIZE(sha_384_512_algs); i++)
-			crypto_unregister_ahash(&sha_384_512_algs[i]);
-	}
+	if (dd->caps.has_sha_384_512)
+		crypto_unregister_ahashes(sha_384_512_algs,
+					  ARRAY_SIZE(sha_384_512_algs));
 }
 
 static int atmel_sha_register_algs(struct atmel_sha_dev *dd)
 {
-	int err, i, j;
+	int err, i;
 
 	for (i = 0; i < ARRAY_SIZE(sha_1_256_algs); i++) {
 		atmel_sha_alg_init(&sha_1_256_algs[i]);
@@ -2480,18 +2476,15 @@ static int atmel_sha_register_algs(struct atmel_sha_dev *dd)
 
 	/*i = ARRAY_SIZE(sha_hmac_algs);*/
 err_sha_hmac_algs:
-	for (j = 0; j < i; j++)
-		crypto_unregister_ahash(&sha_hmac_algs[j]);
+	crypto_unregister_ahashes(sha_hmac_algs, i);
 	i = ARRAY_SIZE(sha_384_512_algs);
 err_sha_384_512_algs:
-	for (j = 0; j < i; j++)
-		crypto_unregister_ahash(&sha_384_512_algs[j]);
+	crypto_unregister_ahashes(sha_384_512_algs, i);
 	crypto_unregister_ahash(&sha_224_alg);
 err_sha_224_algs:
 	i = ARRAY_SIZE(sha_1_256_algs);
 err_sha_1_256_algs:
-	for (j = 0; j < i; j++)
-		crypto_unregister_ahash(&sha_1_256_algs[j]);
+	crypto_unregister_ahashes(sha_1_256_algs, i);
 
 	return err;
 }
@@ -2534,6 +2527,7 @@ static void atmel_sha_get_cap(struct atmel_sha_dev *dd)
 
 	/* keep only major version number */
 	switch (dd->hw_version & 0xff0) {
+	case 0x800:
 	case 0x700:
 	case 0x600:
 	case 0x510:
@@ -2625,27 +2619,23 @@ static int atmel_sha_probe(struct platform_device *pdev)
 	}
 
 	/* Initializing the clock */
-	sha_dd->iclk = devm_clk_get(&pdev->dev, "sha_clk");
+	sha_dd->iclk = devm_clk_get_prepared(&pdev->dev, "sha_clk");
 	if (IS_ERR(sha_dd->iclk)) {
 		dev_err(dev, "clock initialization failed.\n");
 		err = PTR_ERR(sha_dd->iclk);
 		goto err_tasklet_kill;
 	}
 
-	err = clk_prepare(sha_dd->iclk);
-	if (err)
-		goto err_tasklet_kill;
-
 	err = atmel_sha_hw_version_init(sha_dd);
 	if (err)
-		goto err_iclk_unprepare;
+		goto err_tasklet_kill;
 
 	atmel_sha_get_cap(sha_dd);
 
 	if (sha_dd->caps.has_dma) {
 		err = atmel_sha_dma_init(sha_dd);
 		if (err)
-			goto err_iclk_unprepare;
+			goto err_tasklet_kill;
 
 		dev_info(dev, "using %s for DMA transfers\n",
 				dma_chan_name(sha_dd->dma_lch_in.chan));
@@ -2671,8 +2661,6 @@ err_algs:
 	spin_unlock(&atmel_sha.lock);
 	if (sha_dd->caps.has_dma)
 		atmel_sha_dma_cleanup(sha_dd);
-err_iclk_unprepare:
-	clk_unprepare(sha_dd->iclk);
 err_tasklet_kill:
 	tasklet_kill(&sha_dd->queue_task);
 	tasklet_kill(&sha_dd->done_task);
@@ -2680,7 +2668,7 @@ err_tasklet_kill:
 	return err;
 }
 
-static int atmel_sha_remove(struct platform_device *pdev)
+static void atmel_sha_remove(struct platform_device *pdev)
 {
 	struct atmel_sha_dev *sha_dd = platform_get_drvdata(pdev);
 
@@ -2695,10 +2683,6 @@ static int atmel_sha_remove(struct platform_device *pdev)
 
 	if (sha_dd->caps.has_dma)
 		atmel_sha_dma_cleanup(sha_dd);
-
-	clk_unprepare(sha_dd->iclk);
-
-	return 0;
 }
 
 static struct platform_driver atmel_sha_driver = {

@@ -516,6 +516,15 @@
 	};
 }; /* pinctrl */
 
+&poweroff {
+	debounce-delay-us = <976>;
+	status = "okay";
+
+	input@0 {
+		reg = <0>;
+	};
+};
+
 &qspi {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_qspi>;
@@ -574,15 +583,6 @@
 	cd-gpios = <&pioA 13 GPIO_ACTIVE_LOW>;
 	disable-wp;
 	status = "okay";
-};
-
-&shutdown_controller {
-	atmel,shdwc-debouncer = <976>;
-	status = "okay";
-
-	input@0 {
-		reg = <0>;
-	};
 };
 
 &trng {

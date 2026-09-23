@@ -21,10 +21,11 @@
 #include <linux/dma-mapping.h>
 #include <linux/of.h>
 #include <linux/of_dma.h>
-#include <linux/of_device.h>
 #include <linux/slab.h>
 
 #include "sf-pdma.h"
+
+#define PDMA_QUIRK_NO_STRICT_ORDERING   BIT(0)
 
 #ifndef readq
 static inline unsigned long long readq(void __iomem *addr)
@@ -353,7 +354,7 @@ static irqreturn_t sf_pdma_done_isr(int irq, void *dev_id)
 	if (!residue) {
 		tasklet_hi_schedule(&chan->done_tasklet);
 	} else {
-		/* submit next trascatioin if possible */
+		/* submit next transaction if possible */
 		struct sf_pdma_desc *desc = chan->desc;
 
 		desc->src_addr += desc->xfer_size - residue;
@@ -492,33 +493,6 @@ static void sf_pdma_setup_chans(struct sf_pdma *pdma)
 	}
 }
 
-static struct dma_chan *sf_pdma_of_xlate(struct of_phandle_args *dma_spec,
-					   struct of_dma *ofdma)
-{
-	struct sf_pdma *pdma = ofdma->of_dma_data;
-	struct device *dev = pdma->dma_dev.dev;
-	struct sf_pdma_chan  *chan;
-	struct dma_chan *c;
-	u32 channel_id;
-
-	if (dma_spec->args_count != 1) {
-		dev_err(dev, "Bad number of cells\n");
-		return NULL;
-	}
-
-	channel_id = dma_spec->args[0];
-
-	chan = &pdma->chans[channel_id];
-
-	c = dma_get_slave_channel(&chan->vchan.chan);
-	if (!c) {
-		dev_err(dev, "No more channels available\n");
-		return NULL;
-	}
-
-	return c;
-}
-
 static int sf_pdma_probe(struct platform_device *pdev)
 {
 	const struct sf_pdma_driver_platdata *ddata;
@@ -547,12 +521,12 @@ static int sf_pdma_probe(struct platform_device *pdev)
 
 	pdma->n_chans = n_chans;
 
-	pdma->transfer_type = PDMA_FULL_SPEED;
+	pdma->transfer_type = PDMA_FULL_SPEED | PDMA_STRICT_ORDERING;
 
-	ddata  = of_device_get_match_data(&pdev->dev);
+	ddata  = device_get_match_data(&pdev->dev);
 	if (ddata) {
-		if (ddata->quirks & NO_STRICT_ORDERING)
-			pdma->transfer_type &= ~(NO_STRICT_ORDERING);
+		if (ddata->quirks & PDMA_QUIRK_NO_STRICT_ORDERING)
+			pdma->transfer_type &= ~PDMA_STRICT_ORDERING;
 	}
 
 	pdma->membase = devm_platform_ioremap_resource(pdev, 0);
@@ -602,7 +576,7 @@ static int sf_pdma_probe(struct platform_device *pdev)
 	}
 
 	ret = of_dma_controller_register(pdev->dev.of_node,
-					 sf_pdma_of_xlate, pdma);
+					 of_dma_xlate_by_chan_id, pdma);
 	if (ret < 0) {
 		dev_err(&pdev->dev,
 			"Can't register SiFive Platform OF_DMA. (%d)\n", ret);
@@ -617,7 +591,7 @@ err_unregister:
 	return ret;
 }
 
-static int sf_pdma_remove(struct platform_device *pdev)
+static void sf_pdma_remove(struct platform_device *pdev)
 {
 	struct sf_pdma *pdma = platform_get_drvdata(pdev);
 	struct sf_pdma_chan *ch;
@@ -634,13 +608,14 @@ static int sf_pdma_remove(struct platform_device *pdev)
 		tasklet_kill(&ch->err_tasklet);
 	}
 
-	dma_async_device_unregister(&pdma->dma_dev);
+	if (pdev->dev.of_node)
+		of_dma_controller_free(pdev->dev.of_node);
 
-	return 0;
+	dma_async_device_unregister(&pdma->dma_dev);
 }
 
 static const struct sf_pdma_driver_platdata mpfs_pdma = {
-	.quirks = NO_STRICT_ORDERING,
+	.quirks = PDMA_QUIRK_NO_STRICT_ORDERING,
 };
 
 static const struct of_device_id sf_pdma_dt_ids[] = {
@@ -654,7 +629,6 @@ static const struct of_device_id sf_pdma_dt_ids[] = {
 	},
 	{},
 };
-
 MODULE_DEVICE_TABLE(of, sf_pdma_dt_ids);
 
 static struct platform_driver sf_pdma_driver = {

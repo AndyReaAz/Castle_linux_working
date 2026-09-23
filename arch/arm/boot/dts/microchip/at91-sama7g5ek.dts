@@ -36,16 +36,6 @@
 		i2c2 = &i2c9;
 	};
 
-	clocks {
-		slow_xtal {
-			clock-frequency = <32768>;
-		};
-
-		main_xtal {
-			clock-frequency = <24000000>;
-		};
-	};
-
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -87,6 +77,14 @@
 	memory@60000000 {
 		device_type = "memory";
 		reg = <0x60000000 0x20000000>;
+	};
+
+	reg_5v: regulator-5v {
+		compatible = "regulator-fixed";
+		regulator-name = "5V_MAIN";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
 	};
 
 	sound: sound {
@@ -256,12 +254,11 @@
 		i2c-digital-filter-width-ns = <35>;
 		status = "okay";
 
-		pac1934@10 {
+		power-monitor@10 {
 			compatible = "microchip,pac1934";
 			reg = <0x10>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			status = "okay";
 
 			channel@1 {
 				reg = <0x1>;
@@ -288,9 +285,14 @@
 			};
 		};
 
-		mcp16502@5b {
+		pmic@5b {
 			compatible = "microchip,mcp16502";
 			reg = <0x5b>;
+			lvin-supply = <&reg_5v>;
+			pvin1-supply = <&reg_5v>;
+			pvin2-supply = <&reg_5v>;
+			pvin3-supply = <&reg_5v>;
+			pvin4-supply = <&reg_5v>;
 			status = "okay";
 
 			regulators {
@@ -345,7 +347,7 @@
 
 					regulator-state-standby {
 						regulator-on-in-suspend;
-						regulator-suspend-voltage = <1150000>;
+						regulator-suspend-microvolt = <1150000>;
 						regulator-mode = <4>;
 					};
 
@@ -366,7 +368,7 @@
 
 					regulator-state-standby {
 						regulator-on-in-suspend;
-						regulator-suspend-voltage = <1050000>;
+						regulator-suspend-microvolt = <1050000>;
 						regulator-mode = <4>;
 					};
 
@@ -383,7 +385,7 @@
 					regulator-always-on;
 
 					regulator-state-standby {
-						regulator-suspend-voltage = <1800000>;
+						regulator-suspend-microvolt = <1800000>;
 						regulator-on-in-suspend;
 					};
 
@@ -398,7 +400,7 @@
 					regulator-max-microvolt = <3700000>;
 
 					regulator-state-standby {
-						regulator-suspend-voltage = <1800000>;
+						regulator-suspend-microvolt = <1800000>;
 						regulator-on-in-suspend;
 					};
 
@@ -457,31 +459,39 @@
 		i2c-digital-filter-width-ns = <35>;
 		status = "okay";
 
-		eeprom0: eeprom0@52 {
-			compatible = "atmel,24mac02e4";
-			#address-cells = <1>;
-			#size-cells = <0>;
+		eeprom0: eeprom@52 {
+			compatible = "microchip,24aa025e48";
 			reg = <0x52>;
-			pagesize = <16>;
 			size = <256>;
-			status = "okay";
+			pagesize = <16>;
+			vcc-supply = <&vdd_3v3>;
 
-			eeprom0_eui48: eui48@fa {
-				reg = <0xfa 0x6>;
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				eeprom0_eui48: eui48@fa {
+					reg = <0xfa 0x6>;
+				};
 			};
 		};
 
-		eeprom1: eeprom1@53 {
-			compatible = "atmel,24mac02e4";
-			#address-cells = <1>;
-			#size-cells = <0>;
+		eeprom1: eeprom@53 {
+			compatible = "microchip,24aa025e48";
 			reg = <0x53>;
-			pagesize = <16>;
 			size = <256>;
-			status = "okay";
+			pagesize = <16>;
+			vcc-supply = <&vdd_3v3>;
 
-			eeprom1_eui48: eui48@fa {
-				reg = <0xfa 0x6>;
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				eeprom1_eui48: eui48@fa {
+					reg = <0xfa 0x6>;
+				};
 			};
 		};
 	};
@@ -513,6 +523,10 @@
 	};
 };
 
+&main_xtal {
+	clock-frequency = <24000000>;
+};
+
 &gmac0 {
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -522,10 +536,9 @@
 		     &pinctrl_gmac0_txck_default
 		     &pinctrl_gmac0_phy_irq>;
 	phy-mode = "rgmii-id";
-	status = "okay";
-
 	nvmem-cells = <&eeprom0_eui48>;
 	nvmem-cell-names = "mac-address";
+	status = "okay";
 
 	ethernet-phy@7 {
 		reg = <0x7>;
@@ -542,10 +555,9 @@
 		     &pinctrl_gmac1_mdio_default
 		     &pinctrl_gmac1_phy_irq>;
 	phy-mode = "rmii";
-	status = "okay"; /* Conflict with pdmc0. */
-
 	nvmem-cells = <&eeprom1_eui48>;
 	nvmem-cell-names = "mac-address";
+	status = "okay"; /* Conflict with pdmc0. */
 
 	ethernet-phy@0 {
 		reg = <0x0>;
@@ -557,6 +569,10 @@
 &i2s0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_i2s0_default>;
+};
+
+&main_xtal {
+	clock-frequency = <24000000>;
 };
 
 &pdmc0 {
@@ -913,6 +929,10 @@
 	};
 };
 
+&slow_xtal {
+	clock-frequency = <32768>;
+};
+
 &spdifrx {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_spdifrx_default>;
@@ -991,4 +1011,8 @@
 &vddout25 {
 	vin-supply = <&vdd_3v3>;
 	status = "okay";
+};
+
+&slow_xtal {
+	clock-frequency = <32768>;
 };

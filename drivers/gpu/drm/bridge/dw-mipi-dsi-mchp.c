@@ -14,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
 #include <linux/mod_devicetable.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -86,6 +87,7 @@
 struct dw_mipi_dsi_mchp_chip_data {
 	unsigned int max_data_lanes;
 	struct dw_mipi_dsi_phy_ops *phy_ops;
+	bool has_sfr;
 };
 
 struct dw_mipi_dsi_mchp {
@@ -237,7 +239,7 @@ static void dw_mipi_dsi_phy_write(struct dw_mipi_dsi_mchp *dsi,
 static int dw_mipi_dsi_mchp_init(void *priv_data)
 {
 	struct dw_mipi_dsi_mchp *dsi = priv_data;
-	int ret, index, vco;
+	int index, vco;
 
 	/*
 	 * Get vco from frequency(lane_mbps)
@@ -288,7 +290,7 @@ static int dw_mipi_dsi_mchp_init(void *priv_data)
 			      LOOP_DIV_HIGH_SEL(dsi->feedback_div) |
 			      HIGH_PROGRAM_EN);
 
-	return ret;
+	return 0;
 }
 
 static int dw_mipi_dsi_mchp_get_lane_mbps(void *priv_data,
@@ -314,16 +316,13 @@ static int dw_mipi_dsi_mchp_get_lane_mbps(void *priv_data,
 	}
 
 	mpclk = DIV_ROUND_UP(mode->clock, MSEC_PER_SEC);
-	if (mpclk) {
-		/* take 1/0.8, since mbps must be bigger than bandwidth of RGB */
-		desired_mbps = mpclk * (bpp / lanes) * 10 / 8;
-		if (desired_mbps < max_mbps) {
-			target_mbps = desired_mbps;
-		} else {
-			dev_err(dsi->dev,
-				"DPHY clock frequency is out of range\n");
-			return -ERANGE;
-		}
+	/* take 1/0.8, since mbps must be bigger than bandwidth of RGB */
+	desired_mbps = mpclk * (bpp / lanes) * 10 / 8;
+	if (desired_mbps && desired_mbps < max_mbps) {
+		target_mbps = desired_mbps;
+	} else {
+		dev_err(dsi->dev, "DPHY clock frequency is out of range\n");
+		return -ERANGE;
 	}
 
 	fin = clk_get_rate(dsi->pllref_clk);
@@ -473,21 +472,23 @@ static int dw_mipi_dsi_mchp_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	sfr = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "microchip,sfr");
-	if (IS_ERR_OR_NULL(sfr)) {
-		ret = PTR_ERR(sfr);
-		dev_err(dsi->dev, "Failed to get handle on Special Function Register: %d\n",
-			ret);
-		goto err_dsi_probe;
-	}
-	/* Select DSI in SFR's ISS Configuration Register */
-	ret = regmap_write(sfr, SFR_ISS_CFG, ISS_CFG_DSI_MODE);
-	if (ret) {
-		dev_err(dsi->dev, "Failed to enable DSI in SFR ISS configuration register: %d\n",
-			ret);
-		goto err_dsi_probe;
-	}
+	if (cdata->has_sfr) {
+		sfr = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "microchip,sfr");
+		if (IS_ERR_OR_NULL(sfr)) {
+			ret = PTR_ERR(sfr);
+			dev_err(dsi->dev, "Failed to get handle on Special Function Register: %d\n",
+				ret);
+			goto err_dsi_probe;
+		}
 
+		/* Select DSI in SFR's ISS Configuration Register */
+		ret = regmap_write(sfr, SFR_ISS_CFG, ISS_CFG_DSI_MODE);
+		if (ret) {
+			dev_err(dsi->dev, "Failed to enable DSI in SFR ISS configuration register: %d\n",
+				ret);
+			goto err_dsi_probe;
+		}
+	}
 	dsi->pdata.base = dsi->base;
 	dsi->pdata.max_data_lanes = cdata->max_data_lanes;
 	dsi->pdata.phy_ops = cdata->phy_ops;
@@ -510,25 +511,34 @@ err_dsi_probe:
 	return ret;
 }
 
-static int dw_mipi_dsi_mchp_remove(struct platform_device *pdev)
+static void dw_mipi_dsi_mchp_remove(struct platform_device *pdev)
 {
 	struct dw_mipi_dsi_mchp *dsi = platform_get_drvdata(pdev);
 
 	dw_mipi_dsi_remove(dsi->dsi);
 	clk_disable_unprepare(dsi->pllref_clk);
-
-	return 0;
 }
 
 static const struct dw_mipi_dsi_mchp_chip_data sam9x75_chip_data = {
 	.max_data_lanes = 4,
 	.phy_ops = &dw_mipi_dsi_mchp_phy_ops,
+	.has_sfr = true,
+};
+
+static const struct dw_mipi_dsi_mchp_chip_data sama7d65_chip_data = {
+	.max_data_lanes = 4,
+	.phy_ops = &dw_mipi_dsi_mchp_phy_ops,
+	.has_sfr = false,
 };
 
 static const struct of_device_id dw_mipi_dsi_mchp_dt_ids[] = {
 	{
 	 .compatible	= "microchip,sam9x75-mipi-dsi",
 	 .data		= &sam9x75_chip_data,
+	},
+	{
+	 .compatible    = "microchip,sama7d65-mipi-dsi",
+	 .data		= &sama7d65_chip_data,
 	},
 	{ /* sentinel */ }
 };

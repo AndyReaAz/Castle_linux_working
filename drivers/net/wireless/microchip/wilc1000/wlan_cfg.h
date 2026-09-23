@@ -24,22 +24,14 @@ struct wilc_cfg_word {
 
 struct wilc_cfg_str {
 	u16 id;
+	u16 len;
 	u8 *str;
 };
 
-struct wilc_cfg_bin {
-	u16 id;
-	u8 *bin;
-};
-
 struct wilc_cfg_str_vals {
-	u8 mac_address[7];
-	u8 firmware_version[129];
+	u8 mac_address[8];
+	u8 firmware_version[130];
 	u8 assoc_rsp[WILC_MAX_ASSOC_RESP_FRAME_SIZE];
-};
-
-struct wilc_bin_vals {
-	u8 antenna_param[5];
 };
 
 struct wilc_cfg {
@@ -48,8 +40,6 @@ struct wilc_cfg {
 	struct wilc_cfg_word *w;
 	struct wilc_cfg_str *s;
 	struct wilc_cfg_str_vals *str_vals;
-	struct wilc_cfg_bin *bin;
-	struct wilc_bin_vals *bin_vals;
 };
 
 struct wilc;

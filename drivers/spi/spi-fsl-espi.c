@@ -513,7 +513,6 @@ static int fsl_espi_setup(struct spi_device *spi)
 
 	fsl_espi_setup_transfer(spi, NULL);
 
-	pm_runtime_mark_last_busy(espi->dev);
 	pm_runtime_put_autosuspend(espi->dev);
 
 	return 0;
@@ -720,13 +719,12 @@ static int fsl_espi_probe(struct device *dev, struct resource *mem,
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
 
-	ret = devm_spi_register_controller(dev, host);
+	ret = spi_register_controller(host);
 	if (ret < 0)
 		goto err_pm;
 
 	dev_info(dev, "irq = %u\n", irq);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
@@ -785,7 +783,15 @@ static int of_fsl_espi_probe(struct platform_device *ofdev)
 
 static void of_fsl_espi_remove(struct platform_device *dev)
 {
+	struct spi_controller *host = platform_get_drvdata(dev);
+
+	spi_controller_get(host);
+
+	spi_unregister_controller(host);
+
 	pm_runtime_disable(&dev->dev);
+
+	spi_controller_put(host);
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -835,7 +841,7 @@ static struct platform_driver fsl_espi_driver = {
 		.pm = &espi_pm,
 	},
 	.probe		= of_fsl_espi_probe,
-	.remove_new	= of_fsl_espi_remove,
+	.remove		= of_fsl_espi_remove,
 };
 module_platform_driver(fsl_espi_driver);
 

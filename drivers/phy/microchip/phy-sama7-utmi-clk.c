@@ -48,6 +48,8 @@ static struct {
 	{ .n = "utmi3",		.p = "utmi1",		.id = 2, },
 };
 
+int sama7_utmi_clk_probe(struct platform_device *pdev);
+
 static int sama7_utmi_clk_enable(struct clk_hw *hw)
 {
 	int ret;

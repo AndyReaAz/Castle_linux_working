@@ -127,7 +127,7 @@ SECTIONS
 	}
 #endif
 
-	RO_DATA(8)
+	RO_DATA(PAGE_SIZE)
 
 	/* unwind info */
 	. = ALIGN(4);
@@ -165,6 +165,7 @@ SECTIONS
 	_end = . ;
 
 	STABS_DEBUG
+	MODINFO
 	ELF_DETAILS
 	.note 0 : { *(.note) }
 

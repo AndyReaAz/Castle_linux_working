@@ -2,7 +2,7 @@
 /*
  * Setup code for SAM9X7.
  *
- * Copyright (C) 2022 Microchip Technology Inc. and its subsidiaries
+ * Copyright (C) 2023 Microchip Technology Inc. and its subsidiaries
  *
  * Author: Varshini Rajendran <varshini.rajendran@microchip.com>
  */
@@ -11,7 +11,6 @@
 #include <linux/of_platform.h>
 
 #include <asm/mach/arch.h>
-#include <asm/system_misc.h>
 
 #include "generic.h"
 
@@ -22,7 +21,7 @@ static void __init sam9x7_init(void)
 	sam9x7_pm_init();
 }
 
-static const char *const sam9x7_dt_board_compat[] __initconst = {
+static const char * const sam9x7_dt_board_compat[] __initconst = {
 	"microchip,sam9x7",
 	NULL
 };

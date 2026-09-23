@@ -12,11 +12,14 @@
 #include <linux/irqchip.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
+#include <linux/mfd/syscon.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 
+#define MPFS_MUX_CONFIG_OFFSET		0x54
 #define MPFS_MUX_NUM_IRQS		41
 #define MPFS_MUX_NUM_DIRECT_IRQS	38
 #define MPFS_MUX_NUM_NON_DIRECT_IRQS	3
@@ -88,7 +91,7 @@ struct mpfs_irq_mux_irqchip {
 };
 
 struct mpfs_irq_mux {
-	void __iomem *reg;
+	struct regmap *regmap;
 	u32 mux_config;
 	struct mpfs_irq_mux_irqchip nondirect_irqchips[MPFS_MUX_NUM_NON_DIRECT_IRQS];
 	int parent_irqs[MPFS_MUX_NUM_DIRECT_IRQS];
@@ -212,14 +215,12 @@ static int mpfs_irq_mux_alloc(struct irq_domain *d, unsigned int virq,
 	struct irq_fwspec *fwspec = arg;
 	struct irq_fwspec parent_fwspec;
 	unsigned int bank, line, irq;
-	u64 mask;
 
 	if (!mpfs_irq_mux_is_direct(priv, fwspec))
 		return mpfs_irq_mux_nondirect_alloc(d, virq, fwspec, priv);
 
 	bank = fwspec->param[0] / MPFS_MAX_IRQS_PER_GPIO;
 	line = fwspec->param[0] % MPFS_MAX_IRQS_PER_GPIO;
-	mask = mpfs_irq_mux_bank_configs[bank].mask;
 	irq = line + mpfs_irq_mux_bank_configs[bank].shift;
 
 	parent_fwspec.fwnode = d->parent->fwnode;
@@ -237,33 +238,33 @@ static const struct irq_domain_ops mpfs_irq_mux_domain_ops = {
 	.free = irq_domain_free_irqs_common,
 };
 
-static int __init mpfs_irq_mux_init(struct device_node *node, struct device_node *parent)
+static int mpfs_irq_mux_probe(struct platform_device *pdev)
 {
+	struct device_node *parent;
+	struct device *dev = &pdev->dev;
 	struct mpfs_irq_mux *priv;
 	struct irq_domain *hier_domain, *parent_domain;
-	int i, ret = 0;
+	int i, ret;
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
-	priv->reg = of_iomap(node, 0);
-	if (!priv->reg) {
-		ret = -ENODEV;
-		goto out_free_priv;
-	}
+	priv->regmap = device_node_to_regmap(pdev->dev.parent->of_node);
+	if (IS_ERR(priv->regmap))
+		return PTR_ERR(priv->regmap);
 
-	priv->mux_config = readl(priv->reg);
+	ret = regmap_read(priv->regmap, MPFS_MUX_CONFIG_OFFSET, &priv->mux_config);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < MPFS_MUX_NUM_DIRECT_IRQS; i++) {
 		struct of_phandle_args parent_irq;
 		int ret;
 
-		ret = of_irq_parse_one(node, i, &parent_irq);
-		if (ret) {
-			ret = -ENODEV;
-			goto out_unmap;
-		}
+		ret = of_irq_parse_one(to_of_node(dev->fwnode), i, &parent_irq);
+		if (ret)
+			return ret;
 
 		/*
 		 * The parent irqs are saved off for the first 38 interrupts
@@ -274,14 +275,12 @@ static int __init mpfs_irq_mux_init(struct device_node *node, struct device_node
 		priv->parent_irqs[i] = parent_irq.args[0];
 	}
 
+	parent = of_irq_find_parent(to_of_node(dev->fwnode));
 	parent_domain = irq_find_host(parent);
-	hier_domain = irq_domain_add_hierarchy(parent_domain, 0, MPFS_MAX_IRQS_PER_GPIO * 3,
-					       node, &mpfs_irq_mux_domain_ops, priv);
-	if (!hier_domain) {
-		pr_err("%pOF: failed to allocate domain\n", node);
-		ret = -ENODEV;
-		goto out_unmap;
-	}
+	hier_domain = irq_domain_create_hierarchy(parent_domain, 0, MPFS_MAX_IRQS_PER_GPIO * 3,
+						  dev->fwnode, &mpfs_irq_mux_domain_ops, priv);
+	if (!hier_domain)
+		return dev_err_probe(dev, -ENODEV, "failed to add hierarchical domain\n");
 
 	/*
 	 * The last 3 interrupts must be the non-direct/muxed ones, per
@@ -291,24 +290,29 @@ static int __init mpfs_irq_mux_init(struct device_node *node, struct device_node
 		int irq_index = i + MPFS_MUX_NUM_DIRECT_IRQS;
 
 		priv->nondirect_irqchips[i].bank = i;
-		priv->nondirect_irqchips[i].irq = irq_of_parse_and_map(node, irq_index);
+		priv->nondirect_irqchips[i].irq = irq_of_parse_and_map(to_of_node(dev->fwnode),
+								       irq_index);
 		priv->nondirect_irqchips[i].offset = i * MPFS_MAX_IRQS_PER_GPIO;
 		irq_set_chained_handler_and_data(priv->nondirect_irqchips[i].irq,
 						 mpfs_irq_mux_nondirect_handler,
 						 &priv->nondirect_irqchips[i]);
 	}
 
-	pr_info("mux configuration %x\n", priv->mux_config);
+	dev_info(dev, "mux configuration %x\n", priv->mux_config);
 
 	return 0;
-
-out_unmap:
-	iounmap(priv->reg);
-
-out_free_priv:
-	kfree(priv);
-
-	return ret;
 }
 
-IRQCHIP_DECLARE(mpfs_irq_mux, "microchip,mpfs-gpio-irq-mux", mpfs_irq_mux_init);
+static const struct of_device_id mpfs_irq_mux_match[] = {
+	{ .compatible = "microchip,mpfs-gpio-irq-mux" },
+	{}
+};
+
+static struct platform_driver mpfs_irq_mux_driver = {
+	.driver = {
+		.name = "mpfs_irq_mux",
+		.of_match_table	= mpfs_irq_mux_match,
+	},
+	.probe = mpfs_irq_mux_probe,
+};
+builtin_platform_driver(mpfs_irq_mux_driver);

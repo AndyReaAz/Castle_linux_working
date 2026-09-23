@@ -6,9 +6,6 @@
 #include "mpfs.dtsi"
 #include "mpfs-video-kit-fabric.dtsi"
 
-/* Clock frequency (in Hz) of the rtcclk */
-#define MTIMER_FREQ		1000000
-
 / {
 	#address-cells = <2>;
 	#size-cells = <2>;
@@ -34,10 +31,6 @@
 
 	chosen {
 		stdout-path = "serial1:115200n8";
-	};
-
-	cpus {
-		timebase-frequency = <MTIMER_FREQ>;
 	};
 
 	kernel: memory@80000000 {
@@ -80,7 +73,6 @@
 			compatible = "shared-dma-pool";
 			size = <0x0 0x2000000>;
 			no-map;
-			linux,dma-default;
 			alloc-ranges = <0x0 0xc4000000 0x0 0x2000000>;
 		};
 
@@ -236,4 +228,8 @@
 	dma-noncoherent;
 	status = "okay";
 	dr_mode = "otg";
+};
+
+&wdt1 {
+	status = "okay";
 };

@@ -26,6 +26,12 @@ struct sama7_usb_phy {
 	int port;
 };
 
+int sama7_usb_phy_set_mode(struct phy *phy, enum phy_mode mode, int submode);
+int sama7_usb_phy_init(struct phy *phy);
+int sama7_phy_power_on(struct phy *phy);
+int sama7_phy_power_off(struct phy *phy);
+int sama7_usb_phy_probe(struct platform_device *pdev);
+
 int sama7_usb_phy_set_mode(struct phy *phy, enum phy_mode mode, int submode)
 {
 	struct sama7_usb_phy *sama7_phy = phy_get_drvdata(phy);

@@ -12,7 +12,7 @@
  * Copyright (C) 2011 Peter Kooiman <pkooiman@gmail.com>
  */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/completion.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -536,6 +536,7 @@ static void irtoy_disconnect(struct usb_interface *intf)
 	usb_free_urb(ir->urb_out);
 	usb_kill_urb(ir->urb_in);
 	usb_free_urb(ir->urb_in);
+	rc_free_device(ir->rc);
 	kfree(ir->in);
 	kfree(ir->out);
 	kfree(ir);

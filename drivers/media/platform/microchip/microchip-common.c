@@ -29,6 +29,10 @@ static const struct mvideo_format mvideo_formats[] = {
 		V4L2_PIX_FMT_RGB24, 1, 1, 1, 1 },
 	{ MVCF_RGB, 8, NULL, MEDIA_BUS_FMT_RGB888_1X24, 3,
 		V4L2_PIX_FMT_RGB24, 1, 1, 1, 1 },
+	{ MVCF_XRGB, 8, NULL, MEDIA_BUS_FMT_RGB888_1X24, 4,
+		V4L2_PIX_FMT_XRGB32, 1, 1, 1, 1 },
+	{ MVCF_XBGR, 8, NULL, MEDIA_BUS_FMT_BGR888_1X24, 4,
+		V4L2_PIX_FMT_XBGR32, 1, 1, 1, 1 },
 	{ MVCF_MJPEG, 8, NULL, MEDIA_BUS_FMT_JPEG_1X8, 3,
 		V4L2_PIX_FMT_MJPEG, 1, 1, 1, 1 },
 	{ MVCF_MONO_SENSOR, 8, "mono", MEDIA_BUS_FMT_Y8_1X8, 1,
@@ -195,7 +199,7 @@ int mvc_enum_mbus_code(struct v4l2_subdev *subdev,
 	if (code->index)
 		return -EINVAL;
 
-	format = v4l2_subdev_get_try_format(subdev, sd_state, code->pad);
+	format = v4l2_subdev_state_get_format(sd_state, code->pad);
 
 	code->code = format->code;
 
@@ -212,7 +216,7 @@ int mvc_enum_frame_size(struct v4l2_subdev *subdev,
 	if (fse->which == V4L2_SUBDEV_FORMAT_ACTIVE)
 		return -EINVAL;
 
-	format = v4l2_subdev_get_try_format(subdev, sd_state, fse->pad);
+	format = v4l2_subdev_state_get_format(sd_state, fse->pad);
 
 	if (fse->index || fse->code != format->code)
 		return -EINVAL;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: (GPL-2.0)
+// SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 /*
  * Microchip Polarfire SoC MSS CAN controller driver
  *
@@ -196,6 +196,7 @@ enum mpfs_can_reg {
 						 MPFS_CAN_ISR_ACK_ERR_MASK | \
 						 MPFS_CAN_ISR_FORM_ERR_MASK | \
 						 MPFS_CAN_ISR_CRC_ERR_MASK | \
+						 MPFS_CAN_ISR_OVR_LOAD_MASK | \
 						 MPFS_CAN_ISR_BUS_OFF_MASK)
 
 #define MPFS_CAN_IER_MASK			(MPFS_CAN_IER_ARB_LOSS_MASK | \
@@ -209,6 +210,7 @@ enum mpfs_can_reg {
 						 MPFS_CAN_IER_TXMSG_SNT_MASK | \
 						 MPFS_CAN_IER_RXMSG_SNT_MASK | \
 						 MPFS_CAN_IER_RTR_SNT_MASK | \
+						 MPFS_CAN_IER_OVR_LOAD_MASK | \
 						 MPFS_CAN_IER_GLOBAL_MASK)
 
 /**
@@ -338,28 +340,23 @@ static int mpfs_can_start(struct net_device *ndev)
 	mpfs_can_write(priv, MPFS_CAN_COMMAND_OFFSET, reg_msr);
 
 	for (buf = 0; buf < MPFS_CAN_RX_BUFFERS; buf++)	{
+		u32 val;
+
 		mpfs_can_write(priv, MPFS_CAN_AMR_OFFSET(buf), MPFS_CAN_AMR_MASK);
 		mpfs_can_write(priv, MPFS_CAN_ACR_OFFSET(buf), 0x0);
 		mpfs_can_write(priv, MPFS_CAN_AMR_DATA_OFFSET(buf), MPFS_CAN_AMR_DATA_MASK);
 		mpfs_can_write(priv, MPFS_CAN_ACR_DATA_OFFSET(buf), 0x0);
 
 		/* Enable the link flag for the buffers, so that the receive data will store
-		 * in sequential order.
+		 * in sequential order, except for the last buffer.
 		 */
-		mpfs_can_write(priv, MPFS_CAN_RX_MSG_CTR_OFFSET(buf),
-			       (MPFS_CAN_RXMSG_CTRL_CMD_LF_MASK |
-				MPFS_CAN_RXMSG_CTRL_CMD_WPNL_MASK |
-				MPFS_CAN_RXMSG_CTRL_CMD_WPNH_MASK |
-				MPFS_CAN_RXMSG_CTRL_CMD_BUFEN_MASK |
-				MPFS_CAN_RXMSG_CTRL_CMD_RXINTEN_MASK));
+		val = MPFS_CAN_RXMSG_CTRL_CMD_WPNL_MASK | MPFS_CAN_RXMSG_CTRL_CMD_WPNH_MASK |
+		      MPFS_CAN_RXMSG_CTRL_CMD_BUFEN_MASK | MPFS_CAN_RXMSG_CTRL_CMD_RXINTEN_MASK;
 
-		/* Link flag is not needed for the last buffer */
-		if (buf == (MPFS_CAN_RX_BUFFERS - 1))
-			mpfs_can_write(priv, MPFS_CAN_RX_MSG_CTR_OFFSET(buf),
-				       (MPFS_CAN_RXMSG_CTRL_CMD_WPNL_MASK |
-					MPFS_CAN_RXMSG_CTRL_CMD_WPNH_MASK |
-					MPFS_CAN_RXMSG_CTRL_CMD_BUFEN_MASK |
-					MPFS_CAN_RXMSG_CTRL_CMD_RXINTEN_MASK));
+		if (buf != (MPFS_CAN_RX_BUFFERS - 1))
+			val |= MPFS_CAN_RXMSG_CTRL_CMD_LF_MASK;
+
+		mpfs_can_write(priv, MPFS_CAN_RX_MSG_CTR_OFFSET(buf), val);
 	}
 
 	priv->can.state = CAN_STATE_ERROR_ACTIVE;
@@ -890,7 +887,7 @@ static int mpfs_can_probe(struct platform_device *pdev)
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 
 	ret = clk_bulk_get_all(&pdev->dev, &priv->clks);
-	if (ret < 0)
+	if (ret < 2)
 		goto err;
 
 	priv->num_clocks = ret;
@@ -922,7 +919,7 @@ err:
 	return ret;
 }
 
-static int mpfs_can_remove(struct platform_device *pdev)
+static void mpfs_can_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct mpfs_can_priv *priv = netdev_priv(ndev);
@@ -930,8 +927,6 @@ static int mpfs_can_remove(struct platform_device *pdev)
 	unregister_candev(ndev);
 	netif_napi_del(&priv->napi);
 	free_candev(ndev);
-
-	return 0;
 }
 
 static const struct of_device_id mpfs_can_of_match[] = {

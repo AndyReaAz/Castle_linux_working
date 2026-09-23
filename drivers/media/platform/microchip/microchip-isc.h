@@ -88,7 +88,7 @@ struct isc_format {
 #define GAM_RENABLE	BIT(9)
 #define VHXS_ENABLE	BIT(10)
 #define CSC_ENABLE	BIT(11)
-#define CBC_ENABLE	BIT(12)
+#define CBHS_ENABLE	BIT(12)
 #define SUB422_ENABLE	BIT(13)
 #define SUB420_ENABLE	BIT(14)
 
@@ -134,11 +134,19 @@ enum{
 	HIST_DISABLED,
 };
 
+#define GAMMA_ENTRIES		64
+
+/* CC matrix coefficients (3x3 row-major) and per-channel offsets */
+#define ISC_CC_COEFF_NUM	9
+#define ISC_CC_OFFSET_NUM	3
+
 struct isc_ctrls {
 	struct v4l2_ctrl_handler handler;
 
 	u32 brightness;
 	u32 contrast;
+	u32 hue;
+	u32 saturation;
 	u8 gamma_index;
 #define ISC_WB_NONE	0
 #define ISC_WB_AUTO	1
@@ -147,15 +155,48 @@ struct isc_ctrls {
 
 	/* one for each component : GR, R, GB, B */
 	u32 gain[HIST_BAYER];
+	u32 gain_smooth[HIST_BAYER];
 	s32 offset[HIST_BAYER];
 
-	u32 hist_entry[HIST_ENTRIES];
+	u32 hist_entry[HIST_BAYER][HIST_ENTRIES];
 	u32 hist_count[HIST_BAYER];
 	u8 hist_id;
 	u8 hist_stat;
 #define HIST_MIN_INDEX		0
 #define HIST_MAX_INDEX		1
 	u32 hist_minmax[HIST_BAYER][2];
+	u32 channel_avg[HIST_BAYER];      /* Average pixel intensity per channel */
+	u32 total_pixels[HIST_BAYER];     /* Total pixels per channel */
+
+	/* Per-channel capture metadata — snapshot at HISDONE IRQ time */
+	u32 hist_capture_frame[HIST_BAYER];  /* sequence of the measured frame */
+	u64 hist_capture_ts[HIST_BAYER];     /* ktime_get_ns() at measurement */
+
+	/*
+	 * Timestamp of the last histogram cycle in which an IPA was actively
+	 * consuming stats (isc_stats_active() returned true).  Used by
+	 * isc_awb_work() to suppress kernel grey-world updates for a brief
+	 * holdoff period after the IPA closes the stats device, preventing
+	 * the kernel AWB from overwriting the IPA's converged WB gains during
+	 * application teardown.
+	 */
+	ktime_t ipa_last_active;
+
+	/*
+	 * Custom per-channel gamma LUT (10-bit output values, 64 entries).
+	 * Set via ISC_CID_GAMMA_{R,G,B}_LUT controls.  When gamma_lut_override
+	 * is true these arrays are converted to hardware format at pipeline
+	 * start-up, overriding the preset curve from gamma_index.
+	 */
+	u32 gamma_lut_r[GAMMA_ENTRIES];
+	u32 gamma_lut_g[GAMMA_ENTRIES];
+	u32 gamma_lut_b[GAMMA_ENTRIES];
+	bool gamma_lut_override;
+
+	/* CC matrix shadow; committed from isc_set_pipeline() and isc_awb_work() */
+	s32 cc_coeff[ISC_CC_COEFF_NUM];
+	s32 cc_offset[ISC_CC_OFFSET_NUM];
+	bool cc_dirty;
 };
 
 #define ISC_PIPE_LINE_NODE_NUM	15
@@ -193,6 +234,23 @@ enum isc_scaler_pads {
 	ISC_SCALER_PAD_SINK	= 0,
 	ISC_SCALER_PAD_SOURCE	= 1,
 	ISC_SCALER_PADS_NUM	= 2,
+};
+
+/* Video device node structure */
+struct isc_vdev_node {
+	struct video_device vdev;
+	struct vb2_queue buf_queue;
+	struct mutex vlock; /* lock for video node */
+	struct media_pad pad;
+};
+
+/* Statistics device structure */
+struct isc_stats {
+	struct isc_device *isc;
+	struct isc_vdev_node vnode;
+	struct list_head stat;
+	spinlock_t lock; /* lock for buffers */
+	struct v4l2_format vdev_fmt;
 };
 
 /*
@@ -336,12 +394,40 @@ struct isc_device {
 		struct v4l2_ctrl	*b_off_ctrl;
 		struct v4l2_ctrl	*gr_off_ctrl;
 		struct v4l2_ctrl	*gb_off_ctrl;
+		struct v4l2_ctrl        *cc_rr;
+		struct v4l2_ctrl        *cc_rg;
+		struct v4l2_ctrl        *cc_rb;
+		struct v4l2_ctrl        *cc_or;
+		struct v4l2_ctrl        *cc_gr;
+		struct v4l2_ctrl        *cc_gg;
+		struct v4l2_ctrl        *cc_gb;
+		struct v4l2_ctrl        *cc_og;
+		struct v4l2_ctrl        *cc_br;
+		struct v4l2_ctrl        *cc_bg;
+		struct v4l2_ctrl        *cc_bb;
+		struct v4l2_ctrl        *cc_ob;
 	};
 
-#define GAMMA_ENTRIES	64
+	/* Statistics device */
+	struct isc_stats stats;
+
 	/* pointer to the defined gamma table */
 	const u32	(*gamma_table)[GAMMA_ENTRIES];
 	u32		gamma_max;
+	bool		has_cbhs;
+
+	/*
+	 * When true the GAM block operates in bipartite piecewise-linear
+	 * interpolation mode (ISC_GAM_CTRL_BIPART set).  The LUT-to-hardware
+	 * conversion uses a Q9 per-step delta; without bipartite mode the
+	 * delta is a plain per-segment increment.
+	 */
+	bool		gamma_bipartite;
+
+	/* V4L2 ctrl handles for the per-channel gamma LUT override */
+	struct v4l2_ctrl	*gamma_b_lut_ctrl;
+	struct v4l2_ctrl	*gamma_g_lut_ctrl;
+	struct v4l2_ctrl	*gamma_r_lut_ctrl;
 
 	u32		max_width;
 	u32		max_height;
@@ -394,6 +480,10 @@ int isc_scaler_link(struct isc_device *isc);
 int isc_scaler_init(struct isc_device *isc);
 int isc_mc_init(struct isc_device *isc, u32 ver);
 void isc_mc_cleanup(struct isc_device *isc);
+int isc_stats_register(struct isc_device *isc);
+void isc_stats_unregister(struct isc_device *isc);
+void isc_stats_isr(struct isc_stats *stats);
+bool isc_stats_active(struct isc_stats *stats);
 
 struct isc_format *isc_find_format_by_code(struct isc_device *isc,
 					   unsigned int code, int *index);

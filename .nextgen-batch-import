@@ -1,8 +1,0 @@
-NextGen kernel batch snapshot import
-source-commit=bf96df830936986fdb3c7789749ff599300dae01
-source-branch=chatgpt/current-nextgen
-upstream=https://github.com/linux4sam/linux-at91.git
-origin=git@github.com:CastleGroup1/NextGen_linux.git
-working-mirror=git@github.com:AndyReaAz/Castle_linux_working.git
-target-branch=chatgpt/current-nextgen
-batch-mib=64

@@ -16,10 +16,12 @@
 #include <linux/pm_runtime.h>
 #include <linux/platform_device.h>
 
+#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_module.h>
@@ -553,13 +555,91 @@ static const struct atmel_hlcdc_dc_desc atmel_xlcdc_dc_sam9x75 = {
 	.min_height = 0,
 	.max_width = 2048,
 	.max_height = 2048,
-	.max_spw = 0xff,
-	.max_vpw = 0xff,
+	.max_spw = 0x3ff,
+	.max_vpw = 0x3ff,
 	.max_hpw = 0x3ff,
 	.fixed_clksrc = true,
 	.is_xlcdc = true,
 	.nlayers = ARRAY_SIZE(atmel_xlcdc_sam9x75_layers),
 	.layers = atmel_xlcdc_sam9x75_layers,
+	.ops = &atmel_xlcdc_ops,
+};
+
+static const struct atmel_hlcdc_layer_desc atmel_xlcdc_sama7d65_layers[] = {
+	{
+		.name = "base",
+		.formats = &atmel_hlcdc_plane_rgb_formats,
+		.regs_offset = 0x60,
+		.id = 0,
+		.type = ATMEL_HLCDC_BASE_LAYER,
+		.cfgs_offset = 0x1c,
+		.layout = {
+			.xstride = { 2 },
+			.default_color = 3,
+			.general_config = 4,
+			.disc_pos = 5,
+			.disc_size = 6,
+		},
+		.clut_offset = 0x700,
+	},
+	{
+		.name = "overlay1",
+		.formats = &atmel_hlcdc_plane_rgb_formats,
+		.regs_offset = 0x160,
+		.id = 1,
+		.type = ATMEL_HLCDC_OVERLAY_LAYER,
+		.cfgs_offset = 0x1c,
+		.layout = {
+			.pos = 2,
+			.size = 3,
+			.xstride = { 4 },
+			.pstride = { 5 },
+			.default_color = 6,
+			.chroma_key = 7,
+			.chroma_key_mask = 8,
+			.general_config = 9,
+		},
+		.clut_offset = 0xb00,
+	},
+	{
+		.name = "high-end-overlay",
+		.formats = &atmel_hlcdc_plane_rgb_and_yuv_formats,
+		.regs_offset = 0x360,
+		.id = 2,
+		.type = ATMEL_HLCDC_OVERLAY_LAYER,
+		.cfgs_offset = 0x30,
+		.layout = {
+			.pos = 2,
+			.size = 3,
+			.memsize = 4,
+			.xstride = { 5, 7 },
+			.pstride = { 6, 8 },
+			.default_color = 9,
+			.chroma_key = 10,
+			.chroma_key_mask = 11,
+			.general_config = 12,
+			.csc = 16,
+			.scaler_config = 23,
+			.vxs_config = 30,
+			.hxs_config = 31,
+		},
+		.clut_offset = 0x1300,
+	},
+};
+
+static const struct atmel_hlcdc_dc_desc atmel_xlcdc_dc_sama7d65 = {
+	.min_width = 0,
+	.min_height = 0,
+	.max_width = 2048,
+	.max_height = 2048,
+	.max_spw = 0x3ff,
+	.max_vpw = 0x3ff,
+	.max_hpw = 0x3ff,
+	.fixed_clksrc = false,
+	.is_xlcdc = true,
+	.srgb_cap = true,
+	.nlayers = ARRAY_SIZE(atmel_xlcdc_sama7d65_layers),
+	.layers = atmel_xlcdc_sama7d65_layers,
 	.ops = &atmel_xlcdc_ops,
 };
 
@@ -591,6 +671,10 @@ static const struct of_device_id atmel_hlcdc_of_match[] = {
 	{
 		.compatible = "microchip,sam9x75-xlcdc",
 		.data = &atmel_xlcdc_dc_sam9x75,
+	},
+	{
+		.compatible = "microchip,sama7d65-xlcdc",
+		.data = &atmel_xlcdc_dc_sama7d65,
 	},
 	{ /* sentinel */ },
 };
@@ -720,12 +804,6 @@ static int atmel_hlcdc_dc_modeset_init(struct drm_device *dev)
 
 	drm_mode_config_init(dev);
 
-	ret = atmel_hlcdc_create_outputs(dev);
-	if (ret) {
-		dev_err(dev->dev, "failed to create HLCDC outputs: %d\n", ret);
-		return ret;
-	}
-
 	ret = atmel_hlcdc_create_planes(dev);
 	if (ret) {
 		dev_err(dev->dev, "failed to create planes: %d\n", ret);
@@ -735,6 +813,12 @@ static int atmel_hlcdc_dc_modeset_init(struct drm_device *dev)
 	ret = atmel_hlcdc_crtc_create(dev);
 	if (ret) {
 		dev_err(dev->dev, "failed to create crtc\n");
+		return ret;
+	}
+
+	ret = atmel_hlcdc_create_outputs(dev);
+	if (ret) {
+		dev_err(dev->dev, "failed to create HLCDC outputs: %d\n", ret);
 		return ret;
 	}
 
@@ -748,11 +832,16 @@ static int atmel_hlcdc_dc_modeset_init(struct drm_device *dev)
 	return 0;
 }
 
+static struct atmel_hlcdc_dc *atmel_hlcdc_dc_of_dev(struct drm_device *dev)
+{
+	return container_of(dev, struct atmel_hlcdc_dc, dev);
+}
+
 static int atmel_hlcdc_dc_load(struct drm_device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev->dev);
 	const struct of_device_id *match;
-	struct atmel_hlcdc_dc *dc;
+	struct atmel_hlcdc_dc *dc = atmel_hlcdc_dc_of_dev(dev);
 	int ret;
 
 	match = of_match_node(atmel_hlcdc_of_match, dev->dev->parent->of_node);
@@ -765,10 +854,6 @@ static int atmel_hlcdc_dc_load(struct drm_device *dev)
 		dev_err(&pdev->dev, "invalid hlcdc description\n");
 		return -EINVAL;
 	}
-
-	dc = devm_kzalloc(dev->dev, sizeof(*dc), GFP_KERNEL);
-	if (!dc)
-		return -ENOMEM;
 
 	dc->desc = match->data;
 	dc->hlcdc = dev_get_drvdata(dev->dev->parent);
@@ -840,32 +925,37 @@ DEFINE_DRM_GEM_DMA_FOPS(fops);
 static const struct drm_driver atmel_hlcdc_dc_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	DRM_GEM_DMA_DRIVER_OPS,
+	DRM_FBDEV_DMA_DRIVER_OPS,
 	.fops = &fops,
 	.name = "atmel-hlcdc",
 	.desc = "Atmel HLCD Controller DRM",
-	.date = "20141504",
 	.major = 1,
 	.minor = 0,
 };
 
 static int atmel_hlcdc_dc_drm_probe(struct platform_device *pdev)
 {
+	struct atmel_hlcdc_dc *dc;
 	struct drm_device *ddev;
 	int ret;
 
-	ddev = drm_dev_alloc(&atmel_hlcdc_dc_driver, &pdev->dev);
-	if (IS_ERR(ddev))
-		return PTR_ERR(ddev);
+	if (drm_firmware_drivers_only())
+		return -ENODEV;
+
+	dc = devm_drm_dev_alloc(&pdev->dev, &atmel_hlcdc_dc_driver, struct atmel_hlcdc_dc, dev);
+	if (IS_ERR(dc))
+		return PTR_ERR(dc);
+	ddev = &dc->dev;
 
 	ret = atmel_hlcdc_dc_load(ddev);
 	if (ret)
-		goto err_put;
+		return ret;
 
 	ret = drm_dev_register(ddev, 0);
 	if (ret)
 		goto err_unload;
 
-	drm_fbdev_dma_setup(ddev, 24);
+	drm_client_setup_with_fourcc(ddev, DRM_FORMAT_RGB888);
 
 	dev_info(ddev->dev, "DRM device successfully registered\n");
 
@@ -873,9 +963,6 @@ static int atmel_hlcdc_dc_drm_probe(struct platform_device *pdev)
 
 err_unload:
 	atmel_hlcdc_dc_unload(ddev);
-
-err_put:
-	drm_dev_put(ddev);
 
 	return ret;
 }
@@ -886,7 +973,11 @@ static void atmel_hlcdc_dc_drm_remove(struct platform_device *pdev)
 
 	drm_dev_unregister(ddev);
 	atmel_hlcdc_dc_unload(ddev);
-	drm_dev_put(ddev);
+}
+
+static void atmel_hlcdc_dc_drm_shutdown(struct platform_device *pdev)
+{
+	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
 }
 
 static int atmel_hlcdc_dc_drm_suspend(struct device *dev)
@@ -931,7 +1022,8 @@ static const struct of_device_id atmel_hlcdc_dc_of_match[] = {
 
 static struct platform_driver atmel_hlcdc_dc_platform_driver = {
 	.probe	= atmel_hlcdc_dc_drm_probe,
-	.remove_new = atmel_hlcdc_dc_drm_remove,
+	.remove = atmel_hlcdc_dc_drm_remove,
+	.shutdown = atmel_hlcdc_dc_drm_shutdown,
 	.driver	= {
 		.name	= "atmel-hlcdc-display-controller",
 		.pm	= pm_sleep_ptr(&atmel_hlcdc_dc_drm_pm_ops),

@@ -2,7 +2,7 @@
 /*
  * SAM9X7 PMC code.
  *
- * Copyright (C) 2022 Microchip Technology Inc. and its subsidiaries
+ * Copyright (C) 2023 Microchip Technology Inc. and its subsidiaries
  *
  * Author: Varshini Rajendran <varshini.rajendran@microchip.com>
  *
@@ -15,21 +15,6 @@
 #include <dt-bindings/clock/at91.h>
 
 #include "pmc.h"
-
-#define SAM9X7_INIT_TABLE(_table, _count)		\
-	do {						\
-		u8 _i;					\
-		for (_i = 0; _i < (_count); _i++)	\
-			(_table)[_i] = _i;		\
-	} while (0)
-
-#define SAM9X7_FILL_TABLE(_to, _from, _count)		\
-	do {						\
-		u8 _i;					\
-		for (_i = 0; _i < (_count); _i++) {	\
-			(_to)[_i] = (_from)[_i];	\
-		}					\
-	} while (0)
 
 static DEFINE_SPINLOCK(pmc_pll_lock);
 static DEFINE_SPINLOCK(mck_lock);
@@ -76,44 +61,44 @@ static const struct clk_master_layout sam9x7_master_layout = {
 
 /* Fractional PLL core output range. */
 static const struct clk_range plla_core_outputs[] = {
-	{ .min = 375000000, .max = 1600000000 },
+	{ .min = 800000000, .max = 1600000000 },
 };
 
 static const struct clk_range upll_core_outputs[] = {
-	{ .min = 600000000, .max = 1200000000 },
+	{ .min = 600000000, .max = 960000000 },
 };
 
 static const struct clk_range lvdspll_core_outputs[] = {
-	{ .min = 400000000, .max = 800000000 },
+	{ .min = 600000000, .max = 1200000000 },
 };
 
 static const struct clk_range audiopll_core_outputs[] = {
-	{ .min = 400000000, .max = 800000000 },
+	{ .min = 600000000, .max = 1200000000 },
 };
 
 static const struct clk_range plladiv2_core_outputs[] = {
-	{ .min = 375000000, .max = 1600000000 },
+	{ .min = 800000000, .max = 1600000000 },
 };
 
 /* Fractional PLL output range. */
 static const struct clk_range plla_outputs[] = {
-	{ .min = 732421, .max = 800000000 },
+	{ .min = 400000000, .max = 800000000 },
 };
 
 static const struct clk_range upll_outputs[] = {
-	{ .min = 300000000, .max = 600000000 },
+	{ .min = 300000000, .max = 480000000 },
 };
 
 static const struct clk_range lvdspll_outputs[] = {
-	{ .min = 10000000, .max = 800000000 },
+	{ .min = 175000000, .max = 550000000 },
 };
 
 static const struct clk_range audiopll_outputs[] = {
-	{ .min = 10000000, .max = 800000000 },
+	{ .min = 0, .max = 300000000 },
 };
 
 static const struct clk_range plladiv2_outputs[] = {
-	{ .min = 366210, .max = 400000000 },
+	{ .min = 200000000, .max = 400000000 },
 };
 
 /* PLL characteristics. */
@@ -122,6 +107,7 @@ static const struct clk_pll_characteristics plla_characteristics = {
 	.num_output = ARRAY_SIZE(plla_outputs),
 	.output = plla_outputs,
 	.core_output = plla_core_outputs,
+	.acr = UL(0x00020010), /* Old ACR_DEFAULT_PLLA value */
 };
 
 static const struct clk_pll_characteristics upll_characteristics = {
@@ -130,6 +116,7 @@ static const struct clk_pll_characteristics upll_characteristics = {
 	.output = upll_outputs,
 	.core_output = upll_core_outputs,
 	.upll = true,
+	.acr = UL(0x12023010), /* fIN=[20 MHz, 32 MHz] */
 };
 
 static const struct clk_pll_characteristics lvdspll_characteristics = {
@@ -137,6 +124,7 @@ static const struct clk_pll_characteristics lvdspll_characteristics = {
 	.num_output = ARRAY_SIZE(lvdspll_outputs),
 	.output = lvdspll_outputs,
 	.core_output = lvdspll_core_outputs,
+	.acr = UL(0x12023010), /* fIN=[20 MHz, 32 MHz] */
 };
 
 static const struct clk_pll_characteristics audiopll_characteristics = {
@@ -144,6 +132,7 @@ static const struct clk_pll_characteristics audiopll_characteristics = {
 	.num_output = ARRAY_SIZE(audiopll_outputs),
 	.output = audiopll_outputs,
 	.core_output = audiopll_core_outputs,
+	.acr = UL(0x12023010), /* fIN=[20 MHz, 32 MHz] */
 };
 
 static const struct clk_pll_characteristics plladiv2_characteristics = {
@@ -151,6 +140,7 @@ static const struct clk_pll_characteristics plladiv2_characteristics = {
 	.num_output = ARRAY_SIZE(plladiv2_outputs),
 	.output = plladiv2_outputs,
 	.core_output = plladiv2_core_outputs,
+	.acr = UL(0x00020010),  /* Old ACR_DEFAULT_PLLA value */
 };
 
 /* Layout for fractional PLL ID PLLA. */
@@ -202,7 +192,7 @@ static const struct clk_pll_layout pll_divio_layout = {
  * @l:		clock layout
  * @t:		clock type
  * @c:		pll characteristics
- * @f:		true if clock is critical and cannot be disabled
+ * @f:		clock flags
  * @eid:	export index in sam9x7->chws[] array
  */
 static const struct {
@@ -213,7 +203,7 @@ static const struct {
 	const struct clk_pll_characteristics *c;
 	unsigned long f;
 	u8 eid;
-} sam9x7_plls[][PLL_ID_MAX] = {
+} sam9x7_plls[][3] = {
 	[PLL_ID_PLLA] = {
 		{
 			.n = "plla_fracck",
@@ -368,7 +358,7 @@ static const struct {
 /*
  * Peripheral clocks description
  * @n:		clock name
- * @f:		true if clock is critical and cannot be disabled
+ * @f:		clock flags
  * @id:		peripheral id
  */
 static const struct {
@@ -418,7 +408,7 @@ static const struct {
 	{ .n = "pioD_clk",	.id = 44, },
 	{ .n = "tcb1_clk",	.id = 45, },
 	{ .n = "dbgu_clk",	.id = 47, },
-	{ .n = "pmecc_clk",     .id = 48, },
+	{ .n = "pmecc_clk",	.id = 48, },
 	/*
 	 * mpddr_clk feeds DDR controller and is enabled by bootloader thus we
 	 * need to keep it enabled in case there is no Linux consumer for it.
@@ -923,11 +913,11 @@ static void __init sam9x7_pmc_setup(struct device_node *np)
 		if (!mux_table)
 			goto err_free;
 
-		SAM9X7_INIT_TABLE(mux_table, 4);
-		SAM9X7_FILL_TABLE(&mux_table[4], sam9x7_gck[i].pp_mux_table,
-				  sam9x7_gck[i].pp_count);
-		SAM9X7_FILL_TABLE(&parent_names[4], sam9x7_gck[i].pp,
-				  sam9x7_gck[i].pp_count);
+		PMC_INIT_TABLE(mux_table, 4);
+		PMC_FILL_TABLE(&mux_table[4], sam9x7_gck[i].pp_mux_table,
+			       sam9x7_gck[i].pp_count);
+		PMC_FILL_TABLE(&parent_names[4], sam9x7_gck[i].pp,
+			       sam9x7_gck[i].pp_count);
 
 		hw = at91_clk_register_generated(regmap, &pmc_pcr_lock,
 						 &sam9x7_pcr_layout,

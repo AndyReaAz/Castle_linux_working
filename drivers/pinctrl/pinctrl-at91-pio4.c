@@ -12,11 +12,13 @@
 #include <linux/gpio/driver.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/of_address.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/clk/at91_pmc.h>
 
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
@@ -128,6 +130,7 @@ struct atmel_pin {
  */
 struct atmel_pioctrl {
 	void __iomem		*reg_base;
+	void __iomem		*pmc;
 	struct clk		*clk;
 	unsigned int		nbanks;
 	struct pinctrl_dev	*pinctrl_dev;
@@ -390,7 +393,7 @@ static int atmel_gpio_direction_output(struct gpio_chip *chip,
 	return 0;
 }
 
-static void atmel_gpio_set(struct gpio_chip *chip, unsigned int offset, int val)
+static int atmel_gpio_set(struct gpio_chip *chip, unsigned int offset, int val)
 {
 	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	struct atmel_pin *pin = atmel_pioctrl->pins[offset];
@@ -398,10 +401,12 @@ static void atmel_gpio_set(struct gpio_chip *chip, unsigned int offset, int val)
 	atmel_gpio_write(atmel_pioctrl, pin->bank,
 			 val ? ATMEL_PIO_SODR : ATMEL_PIO_CODR,
 			 BIT(pin->line));
+
+	return 0;
 }
 
-static void atmel_gpio_set_multiple(struct gpio_chip *chip, unsigned long *mask,
-				    unsigned long *bits)
+static int atmel_gpio_set_multiple(struct gpio_chip *chip, unsigned long *mask,
+				   unsigned long *bits)
 {
 	struct atmel_pioctrl *atmel_pioctrl = gpiochip_get_data(chip);
 	unsigned int bank;
@@ -431,6 +436,8 @@ static void atmel_gpio_set_multiple(struct gpio_chip *chip, unsigned long *mask,
 		bits[word] >>= ATMEL_PIO_NPINS_PER_BANK;
 #endif
 	}
+
+	return 0;
 }
 
 static struct gpio_chip atmel_gpio_chip = {
@@ -611,8 +618,10 @@ static int atmel_pctl_dt_subnode_to_map(struct pinctrl_dev *pctldev,
 		if (ret)
 			goto exit;
 
-		pinctrl_utils_add_map_mux(pctldev, map, reserved_maps, num_maps,
+		ret = pinctrl_utils_add_map_mux(pctldev, map, reserved_maps, num_maps,
 					  group, func);
+		if (ret)
+			goto exit;
 
 		if (num_configs) {
 			ret = pinctrl_utils_add_map_configs(pctldev, map,
@@ -634,7 +643,6 @@ static int atmel_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
 				     struct pinctrl_map **map,
 				     unsigned int *num_maps)
 {
-	struct device_node *np;
 	unsigned int reserved_maps;
 	int ret;
 
@@ -650,13 +658,11 @@ static int atmel_pctl_dt_node_to_map(struct pinctrl_dev *pctldev,
 	ret = atmel_pctl_dt_subnode_to_map(pctldev, np_config, map,
 					   &reserved_maps, num_maps);
 	if (ret) {
-		for_each_child_of_node(np_config, np) {
+		for_each_child_of_node_scoped(np_config, np) {
 			ret = atmel_pctl_dt_subnode_to_map(pctldev, np, map,
 						    &reserved_maps, num_maps);
-			if (ret < 0) {
-				of_node_put(np);
+			if (ret < 0)
 				break;
-			}
 		}
 	}
 
@@ -877,7 +883,7 @@ static int atmel_conf_pin_config_group_set(struct pinctrl_dev *pctldev,
 				conf |= ATMEL_PIO_IFSCEN_MASK;
 			}
 			break;
-		case PIN_CONFIG_OUTPUT:
+		case PIN_CONFIG_LEVEL:
 			conf |= ATMEL_PIO_DIR_MASK;
 			bank = ATMEL_PIO_BANK(pin_id);
 			pin = ATMEL_PIO_LINE(pin_id);
@@ -1009,6 +1015,7 @@ static struct pinctrl_desc atmel_pinctrl_desc = {
 static int __maybe_unused atmel_pctrl_suspend(struct device *dev)
 {
 	struct atmel_pioctrl *atmel_pioctrl = dev_get_drvdata(dev);
+	bool polarity;
 	int i, j;
 
 	/*
@@ -1028,6 +1035,17 @@ static int __maybe_unused atmel_pctrl_suspend(struct device *dev)
 			atmel_pioctrl->pm_suspend_backup[i].cfgr[j] =
 				atmel_gpio_read(atmel_pioctrl, i,
 						ATMEL_PIO_CFGR);
+			if (atmel_pioctrl->pm_wakeup_sources[i] & BIT(j) && atmel_pioctrl->pmc) {
+				polarity = !!(atmel_gpio_read(atmel_pioctrl, i, ATMEL_PIO_PDSR) & BIT(j));
+
+				if (!polarity)
+					writel((j + i * ATMEL_PIO_NPINS_PER_BANK) | AT91_PMC_WCR_CMD |
+							AT91_PMC_WCR_EN | AT91_PMC_WCR_POL, atmel_pioctrl->pmc + AT91_PMC_WCR);
+				else
+					writel((j + i * ATMEL_PIO_NPINS_PER_BANK) | AT91_PMC_WCR_CMD |
+							AT91_PMC_WCR_EN, atmel_pioctrl->pmc + AT91_PMC_WCR);
+			}
+
 		}
 	}
 
@@ -1049,6 +1067,11 @@ static int __maybe_unused atmel_pctrl_resume(struct device *dev)
 					 ATMEL_PIO_MSKR, BIT(j));
 			atmel_gpio_write(atmel_pioctrl, i, ATMEL_PIO_CFGR,
 					 atmel_pioctrl->pm_suspend_backup[i].cfgr[j]);
+
+			if (atmel_pioctrl->pm_wakeup_sources[i] & BIT(j) && atmel_pioctrl->pmc)
+				writel_relaxed((j + i * ATMEL_PIO_NPINS_PER_BANK) | AT91_PMC_WCR_CMD |
+						~AT91_PMC_WCR_EN, atmel_pioctrl->pmc + AT91_PMC_WCR);
+
 		}
 	}
 
@@ -1086,6 +1109,12 @@ static const struct of_device_id atmel_pctrl_of_match[] = {
 	}
 };
 
+static const struct of_device_id atmel_pmc_of_match[] __refconst = {
+	{ .compatible = "microchip,sama7d65-pmc",},
+	{ .compatible = "microchip,sama7g5-pmc",},
+	{ /* sentinel */ }
+};
+
 /*
  * This lock class allows to tell lockdep that parent IRQ and children IRQ do
  * not share the same class so it does not raise false positive
@@ -1096,6 +1125,7 @@ static struct lock_class_key atmel_request_key;
 static int atmel_pinctrl_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct device_node *pmc_np;
 	struct pinctrl_pin_desc	*pin_desc;
 	const char **group_names;
 	int i, ret;
@@ -1186,6 +1216,10 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		dev_dbg(dev, "pin_id=%u, bank=%u, line=%u", i, bank, line);
 	}
 
+	pmc_np = of_find_matching_node(NULL, atmel_pmc_of_match);
+	atmel_pioctrl->pmc = of_iomap(pmc_np, 0);
+	of_node_put(pmc_np);
+
 	atmel_pioctrl->gpio_chip = &atmel_gpio_chip;
 	atmel_pioctrl->gpio_chip->ngpio = atmel_pioctrl->npins;
 	atmel_pioctrl->gpio_chip->label = dev_name(dev);
@@ -1227,9 +1261,9 @@ static int atmel_pinctrl_probe(struct platform_device *pdev)
 		dev_dbg(dev, "bank %i: irq=%d\n", i, ret);
 	}
 
-	atmel_pioctrl->irq_domain = irq_domain_add_linear(dev->of_node,
-			atmel_pioctrl->gpio_chip->ngpio,
-			&irq_domain_simple_ops, NULL);
+	atmel_pioctrl->irq_domain = irq_domain_create_linear(dev_fwnode(dev),
+							     atmel_pioctrl->gpio_chip->ngpio,
+							     &irq_domain_simple_ops, NULL);
 	if (!atmel_pioctrl->irq_domain)
 		return dev_err_probe(dev, -ENODEV, "can't add the irq domain\n");
 

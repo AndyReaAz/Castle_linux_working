@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
-config SND_ATMEL_SOC
-	tristate "SoC Audio for the Atmel System-on-Chip"
+menu "Atmel"
 	depends on HAS_IOMEM
-	help
-	  Say Y or M if you want to add support for codecs attached to
-	  the ATMEL SSC interface. You will also need
-	  to select the audio interfaces to support below.
-
-if SND_ATMEL_SOC
 
 config SND_ATMEL_SOC_PDC
 	bool
@@ -193,8 +186,8 @@ config SND_MCHP_SOC_ASRC
 config SND_MCHP_SOC_ASRC_CARD
 	tristate "Mirochop ASoC Sound Card driver for boards using ASRC"
 	depends on ARCH_AT91 || COMPILE_TEST
-	depends on SND_ATMEL_SOC && SND_MCHP_SOC_ASRC
+	depends on SND_MCHP_SOC_ASRC
 	help
 	  Say Y or M if you want to enable the Sound Card driver with support for
 	  Microchip's ASRC.
-endif
+endmenu

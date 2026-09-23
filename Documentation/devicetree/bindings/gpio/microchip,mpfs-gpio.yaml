@@ -11,10 +11,14 @@ maintainers:
 
 properties:
   compatible:
-    items:
-      - enum:
-          - microchip,mpfs-gpio
-          - microchip,coregpio-rtl-v3
+    oneOf:
+      - items:
+          - const: microchip,pic64gx-gpio
+          - const: microchip,mpfs-gpio
+      - items:
+          - enum:
+              - microchip,mpfs-gpio
+              - microchip,coregpio-rtl-v3
 
   reg:
     maxItems: 1
@@ -22,7 +26,7 @@ properties:
   interrupts:
     description:
       Interrupt mapping, one per GPIO. Maximum 32 GPIOs.
-    minItems: 14
+    minItems: 1
     maxItems: 32
 
   interrupt-controller: true
@@ -39,7 +43,9 @@ properties:
   ngpios:
     description:
       The number of GPIOs available.
-    enum: [14, 16, 20, 24, 32]
+    minimum: 1
+    maximum: 32
+    default: 32
 
   gpio-controller: true
   gpio-line-names: true
@@ -47,20 +53,8 @@ properties:
 patternProperties:
   "^.+-hog(-[0-9]+)?$":
     type: object
-
-    additionalProperties: false
-
-    properties:
-      gpio-hog: true
-      gpios: true
-      input: true
-      output-high: true
-      output-low: true
-      line-name: true
-
     required:
       - gpio-hog
-      - gpios
 
 allOf:
   - if:
@@ -79,7 +73,6 @@ required:
   - reg
   - "#gpio-cells"
   - gpio-controller
-  - ngpios
   - clocks
 
 additionalProperties: false
@@ -90,19 +83,18 @@ examples:
         compatible = "microchip,mpfs-gpio";
         reg = <0x20122000 0x1000>;
         clocks = <&clkcfg 25>;
-        interrupt-parent = <&irqmux>;
+        interrupt-parent = <&plic>;
         gpio-controller;
         #gpio-cells = <2>;
-        ngpios = <32>;
         interrupt-controller;
         #interrupt-cells = <2>;
-        interrupts = <64>, <65>, <66>, <67>,
-                     <68>, <69>, <70>, <71>,
-                     <72>, <73>, <74>, <75>,
-                     <76>, <77>, <78>, <79>,
-                     <80>, <81>, <82>, <83>,
-                     <84>, <85>, <86>, <87>,
-                     <88>, <89>, <90>, <91>,
-                     <92>, <93>, <94>, <95>;
+        interrupts = <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>,
+                     <53>, <53>, <53>, <53>;
     };
 ...

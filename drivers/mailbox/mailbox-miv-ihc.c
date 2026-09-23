@@ -201,14 +201,12 @@ static int ihc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ihc_remove(struct platform_device *pdev)
+static void ihc_remove(struct platform_device *pdev)
 {
 	struct miv_ihc *ihc = platform_get_drvdata(pdev);
 
 	dma_pool_free(ihc->pool, ihc->buf_base, ihc->dma_addr);
 	dma_pool_destroy(ihc->pool);
-
-	return 0;
 }
 
 static const struct of_device_id ihc_of_match[] = {

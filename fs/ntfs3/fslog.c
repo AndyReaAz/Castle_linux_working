@@ -517,7 +517,7 @@ static inline bool is_rst_area_valid(const struct RESTART_HDR *rhdr)
 		seq_bits -= 1;
 	}
 
-	if (seq_bits != ra->seq_num_bits)
+	if (seq_bits != le32_to_cpu(ra->seq_num_bits))
 		return false;
 
 	/* The log page data offset and record header length must be quad-aligned. */
@@ -609,14 +609,29 @@ static inline void add_client(struct CLIENT_REC *ca, u16 index, __le16 *head)
 	*head = cpu_to_le16(index);
 }
 
+/*
+ * Enumerate restart table.
+ *
+ * @t - table to enumerate.
+ * @c - current enumerated element.
+ *
+ * enumeration starts with @c == NULL
+ * returns next element or NULL
+ */
 static inline void *enum_rstbl(struct RESTART_TABLE *t, void *c)
 {
 	__le32 *e;
 	u32 bprt;
-	u16 rsize = t ? le16_to_cpu(t->size) : 0;
+	u16 rsize;
+
+	if (!t)
+		return NULL;
+
+	rsize = le16_to_cpu(t->size);
 
 	if (!c) {
-		if (!t || !t->total)
+		/* start enumeration. */
+		if (!t->total)
 			return NULL;
 		e = Add2Ptr(t, sizeof(struct RESTART_TABLE));
 	} else {
@@ -724,7 +739,8 @@ static bool check_rstbl(const struct RESTART_TABLE *rt, size_t bytes)
 
 	if (!rsize || rsize > bytes ||
 	    rsize + sizeof(struct RESTART_TABLE) > bytes || bytes < ts ||
-	    le16_to_cpu(rt->total) > ne || ff > ts || lf > ts ||
+	    le16_to_cpu(rt->total) > ne || ff > ts - sizeof(__le32) ||
+	    lf > ts - sizeof(__le32) ||
 	    (ff && ff < sizeof(struct RESTART_TABLE)) ||
 	    (lf && lf < sizeof(struct RESTART_TABLE))) {
 		return false;
@@ -754,6 +770,9 @@ static bool check_rstbl(const struct RESTART_TABLE *rt, size_t bytes)
 			return false;
 
 		off = le32_to_cpu(*(__le32 *)Add2Ptr(rt, off));
+
+		if (off > ts - sizeof(__le32))
+			return false;
 	}
 
 	return true;
@@ -1184,7 +1203,8 @@ out:
 static int log_read_rst(struct ntfs_log *log, bool first,
 			struct restart_info *info)
 {
-	u32 skip, vbo;
+	u32 skip;
+	u64 vbo;
 	struct RESTART_HDR *r_page = NULL;
 
 	/* Determine which restart area we are looking for. */
@@ -2769,13 +2789,14 @@ static inline bool check_file_record(const struct MFT_REC *rec,
 	u16 fn = le16_to_cpu(rec->rhdr.fix_num);
 	u16 ao = le16_to_cpu(rec->attr_off);
 	u32 rs = sbi->record_size;
+	u32 used = le32_to_cpu(rec->used);
 
 	/* Check the file record header for consistency. */
 	if (rec->rhdr.sign != NTFS_FILE_SIGNATURE ||
 	    fo > (SECTOR_SIZE - ((rs >> SECTOR_SHIFT) + 1) * sizeof(short)) ||
 	    (fn - 1) * SECTOR_SIZE != rs || ao < MFTRECORD_FIXUP_OFFSET_1 ||
 	    ao > sbi->record_size - SIZEOF_RESIDENT || !is_rec_inuse(rec) ||
-	    le32_to_cpu(rec->total) != rs) {
+	    le32_to_cpu(rec->total) != rs || used > rs || used < ao) {
 		return false;
 	}
 
@@ -2786,6 +2807,15 @@ static inline bool check_file_record(const struct MFT_REC *rec,
 			continue;
 		return false;
 	}
+
+	/*
+	 * The do_action() handlers compute memmove lengths as
+	 * "rec->used - <offset of validated attr>", which underflows when
+	 * rec->used is smaller than the attribute walk reached.  At this
+	 * point attr is the ATTR_END marker; rec->used must cover it.
+	 */
+	if (used < PtrOffset(rec, attr) + sizeof(attr->type))
+		return false;
 
 	return true;
 }
@@ -2991,7 +3021,7 @@ static struct ATTRIB *attr_create_nonres_log(struct ntfs_sb_info *sbi,
 	if (is_ext) {
 		attr->name_off = SIZEOF_NONRESIDENT_EX_LE;
 		if (is_attr_compressed(attr))
-			attr->nres.c_unit = COMPRESSION_UNIT;
+			attr->nres.c_unit = NTFS_LZNT_CUNIT;
 
 		attr->nres.run_off =
 			cpu_to_le16(SIZEOF_NONRESIDENT_EX + name_size);
@@ -3071,16 +3101,16 @@ static int do_action(struct ntfs_log *log, struct OPEN_ATTR_ENRTY *oe,
 		inode = ilookup(sbi->sb, rno);
 		if (inode) {
 			mi = &ntfs_i(inode)->mi;
-		} else if (op == InitializeFileRecordSegment) {
-			mi = kzalloc(sizeof(struct mft_inode), GFP_NOFS);
-			if (!mi)
-				return -ENOMEM;
-			err = mi_format_new(mi, sbi, rno, 0, false);
-			if (err)
-				goto out;
 		} else {
 			/* Read from disk. */
 			err = mi_get(sbi, rno, &mi);
+			if (err && op == InitializeFileRecordSegment) {
+				mi = kzalloc(sizeof(struct mft_inode),
+					     GFP_NOFS);
+				if (!mi)
+					return -ENOMEM;
+				err = mi_format_new(mi, sbi, rno, 0, false);
+			}
 			if (err)
 				return err;
 		}
@@ -3089,15 +3119,13 @@ static int do_action(struct ntfs_log *log, struct OPEN_ATTR_ENRTY *oe,
 		if (op == DeallocateFileRecordSegment)
 			goto skip_load_parent;
 
-		if (InitializeFileRecordSegment != op) {
-			if (rec->rhdr.sign == NTFS_BAAD_SIGNATURE)
-				goto dirty_vol;
-			if (!check_lsn(&rec->rhdr, rlsn))
-				goto out;
-			if (!check_file_record(rec, NULL, sbi))
-				goto dirty_vol;
-			attr = Add2Ptr(rec, roff);
-		}
+		if (rec->rhdr.sign == NTFS_BAAD_SIGNATURE)
+			goto dirty_vol;
+		if (!check_lsn(&rec->rhdr, rlsn))
+			goto out;
+		if (!check_file_record(rec, NULL, sbi))
+			goto dirty_vol;
+		attr = Add2Ptr(rec, roff);
 
 		if (is_rec_base(rec) || InitializeFileRecordSegment == op) {
 			rno_base = rno;
@@ -3123,7 +3151,7 @@ static int do_action(struct ntfs_log *log, struct OPEN_ATTR_ENRTY *oe,
 
 			if (inode)
 				iput(inode);
-			else if (mi)
+			else
 				mi_put(mi);
 
 			inode = inode_parent;
@@ -3411,6 +3439,9 @@ move_data:
 
 		e1 = Add2Ptr(attr, le16_to_cpu(lrh->attr_off));
 		esize = le16_to_cpu(e1->size);
+		if (PtrOffset(e1, Add2Ptr(hdr, used)) < esize)
+			goto dirty_vol;
+
 		e2 = Add2Ptr(e1, esize);
 
 		memmove(e1, e2, PtrOffset(e2, Add2Ptr(hdr, used)));
@@ -3721,6 +3752,8 @@ int log_replay(struct ntfs_inode *ni, bool *initialized)
 
 	u64 rec_lsn, checkpt_lsn = 0, rlsn = 0;
 	struct ATTR_NAME_ENTRY *attr_names = NULL;
+	u32 attr_names_bytes = 0;
+	u32 oatbl_bytes = 0;
 	struct RESTART_TABLE *dptbl = NULL;
 	struct RESTART_TABLE *trtbl = NULL;
 	const struct RESTART_TABLE *rt;
@@ -3735,6 +3768,7 @@ int log_replay(struct ntfs_inode *ni, bool *initialized)
 	struct NTFS_RESTART *rst = NULL;
 	struct lcb *lcb = NULL;
 	struct OPEN_ATTR_ENRTY *oe;
+	struct ATTR_NAME_ENTRY *ane;
 	struct TRANSACTION_ENTRY *tr;
 	struct DIR_PAGE_ENTRY *dp;
 	u32 i, bytes_per_attr_entry;
@@ -3913,6 +3947,9 @@ check_restart_area:
 		err = -EINVAL;
 		goto out;
 	}
+
+	log->page_mask = log->page_size - 1;
+	log->page_bits = blksize_bits(log->page_size);
 
 	/* If the file size has shrunk then we won't mount it. */
 	if (log->l_size < le64_to_cpu(ra2->l_size)) {
@@ -4103,7 +4140,7 @@ process_log:
 
 	/* Allocate and Read the Transaction Table. */
 	if (!rst->transact_table_len)
-		goto check_dirty_page_table;
+		goto check_dirty_page_table; /* reduce tab pressure. */
 
 	t64 = le64_to_cpu(rst->transact_table_lsn);
 	err = read_log_rec_lcb(log, t64, lcb_ctx_prev, &lcb);
@@ -4143,7 +4180,7 @@ process_log:
 check_dirty_page_table:
 	/* The next record back should be the Dirty Pages Table. */
 	if (!rst->dirty_pages_len)
-		goto check_attribute_names;
+		goto check_attribute_names; /* reduce tab pressure. */
 
 	t64 = le64_to_cpu(rst->dirty_pages_table_lsn);
 	err = read_log_rec_lcb(log, t64, lcb_ctx_prev, &lcb);
@@ -4179,7 +4216,7 @@ check_dirty_page_table:
 
 	/* Convert Ra version '0' into version '1'. */
 	if (rst->major_ver)
-		goto end_conv_1;
+		goto end_conv_1; /* reduce tab pressure. */
 
 	dp = NULL;
 	while ((dp = enum_rstbl(dptbl, dp))) {
@@ -4199,8 +4236,7 @@ end_conv_1:
 	 * remembering the oldest lsn values.
 	 */
 	if (sbi->cluster_size <= log->page_size)
-		goto trace_dp_table;
-
+		goto trace_dp_table; /* reduce tab pressure. */
 	dp = NULL;
 	while ((dp = enum_rstbl(dptbl, dp))) {
 		struct DIR_PAGE_ENTRY *next = dp;
@@ -4221,7 +4257,7 @@ trace_dp_table:
 check_attribute_names:
 	/* The next record should be the Attribute Names. */
 	if (!rst->attr_names_len)
-		goto check_attr_table;
+		goto check_attr_table; /* reduce tab pressure. */
 
 	t64 = le64_to_cpu(rst->attr_names_lsn);
 	err = read_log_rec_lcb(log, t64, lcb_ctx_prev, &lcb);
@@ -4239,9 +4275,9 @@ check_attribute_names:
 	}
 
 	t32 = lrh_length(lrh);
-	rec_len -= t32;
+	attr_names_bytes = rec_len - t32;
 
-	attr_names = kmemdup(Add2Ptr(lrh, t32), rec_len, GFP_NOFS);
+	attr_names = kmemdup(Add2Ptr(lrh, t32), attr_names_bytes, GFP_NOFS);
 	if (!attr_names) {
 		err = -ENOMEM;
 		goto out;
@@ -4253,7 +4289,7 @@ check_attribute_names:
 check_attr_table:
 	/* The next record should be the attribute Table. */
 	if (!rst->open_attr_len)
-		goto check_attribute_names2;
+		goto check_attribute_names2; /* reduce tab pressure. */
 
 	t64 = le64_to_cpu(rst->open_attr_table_lsn);
 	err = read_log_rec_lcb(log, t64, lcb_ctx_prev, &lcb);
@@ -4273,14 +4309,14 @@ check_attr_table:
 	t16 = le16_to_cpu(lrh->redo_off);
 
 	rt = Add2Ptr(lrh, t16);
-	t32 = rec_len - t16;
+	oatbl_bytes = rec_len - t16;
 
-	if (!check_rstbl(rt, t32)) {
+	if (!check_rstbl(rt, oatbl_bytes)) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	oatbl = kmemdup(rt, t32, GFP_NOFS);
+	oatbl = kmemdup(rt, oatbl_bytes, GFP_NOFS);
 	if (!oatbl) {
 		err = -ENOMEM;
 		goto out;
@@ -4313,17 +4349,40 @@ check_attr_table:
 	lcb = NULL;
 
 check_attribute_names2:
-	if (rst->attr_names_len && oatbl) {
-		struct ATTR_NAME_ENTRY *ane = attr_names;
-		while (ane->off) {
+	if (attr_names && oatbl) {
+		off = 0;
+		for (;;) {
+			/* Check we can use attribute name entry 'ane'. */
+			static_assert(sizeof(*ane) == 4);
+			if (off + sizeof(*ane) > attr_names_bytes) {
+				/* just ignore the rest. */
+				break;
+			}
+
+			ane = Add2Ptr(attr_names, off);
+			t16 = le16_to_cpu(ane->off);
+			if (!t16) {
+				/* this is the only valid exit. */
+				break;
+			}
+
+			/* Check we can use open attribute entry 'oe'. */
+			if (t16 + sizeof(*oe) > oatbl_bytes) {
+				/* just ignore the rest. */
+				break;
+			}
+
 			/* TODO: Clear table on exit! */
-			oe = Add2Ptr(oatbl, le16_to_cpu(ane->off));
+			oe = Add2Ptr(oatbl, t16);
 			t16 = le16_to_cpu(ane->name_bytes);
+			off += t16 + sizeof(*ane);
+			if (off > attr_names_bytes) {
+				/* just ignore the rest. */
+				break;
+			}
 			oe->name_len = t16 / sizeof(short);
 			oe->ptr = ane->name;
 			oe->is_attr_name = 2;
-			ane = Add2Ptr(ane,
-				      sizeof(struct ATTR_NAME_ENTRY) + t16);
 		}
 	}
 
@@ -4519,7 +4578,6 @@ copy_lcns:
 			}
 		}
 		goto next_log_record_analyze;
-		;
 	}
 
 	case OpenNonresidentAttribute:
@@ -4658,7 +4716,7 @@ end_log_records_enumerate:
 	 * table are not empty.
 	 */
 	if ((!dptbl || !dptbl->total) && (!trtbl || !trtbl->total))
-		goto end_reply;
+		goto end_replay;
 
 	sbi->flags |= NTFS_FLAGS_NEED_REPLAY;
 	if (is_ro)
@@ -5087,7 +5145,7 @@ undo_action_done:
 
 	sbi->flags &= ~NTFS_FLAGS_NEED_REPLAY;
 
-end_reply:
+end_replay:
 
 	err = 0;
 	if (is_ro)

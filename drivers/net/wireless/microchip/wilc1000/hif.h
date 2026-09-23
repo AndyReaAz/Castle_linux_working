@@ -14,8 +14,7 @@ enum {
 	WILC_AP_MODE = 0x1,
 	WILC_STATION_MODE = 0x2,
 	WILC_GO_MODE = 0x3,
-	WILC_CLIENT_MODE = 0x4,
-	WILC_MONITOR_MODE = 0x5
+	WILC_CLIENT_MODE = 0x4
 };
 
 #define WILC_MAX_NUM_PROBED_SSID		10
@@ -30,8 +29,6 @@ enum {
 	WILC_SET_CFG = 0,
 	WILC_GET_CFG
 };
-
-extern uint32_t cfg_packet_timeout;
 
 struct rf_info {
 	u8 link_speed;
@@ -82,8 +79,7 @@ enum conn_event {
 
 enum {
 	WILC_HIF_SDIO = 0,
-	WILC_HIF_SPI = BIT(0),
-	WILC_HIF_SDIO_GPIO_IRQ = BIT(1)
+	WILC_HIF_SPI = BIT(0)
 };
 
 enum {
@@ -157,14 +153,6 @@ struct host_if_drv {
 	u8 assoc_resp[WILC_MAX_ASSOC_RESP_FRAME_SIZE];
 };
 
-struct wilc_vif;
-
-signed int wilc_send_buffered_eap(struct wilc_vif *vif,
-				  void (*deliver_to_stack)(struct wilc_vif *,
-							   u8 *, u32, u32, u8),
-				  void (*eap_buf_param)(void *), u8 *buff,
-				  unsigned int size, unsigned int pkt_offset,
-				  void *user_arg);
 int wilc_add_ptk(struct wilc_vif *vif, const u8 *ptk, u8 ptk_key_len,
 		 const u8 *mac_addr, const u8 *rx_mic, const u8 *tx_mic,
 		 u8 mode, u8 cipher_mode, u8 index);
@@ -179,7 +167,7 @@ int wilc_add_rx_gtk(struct wilc_vif *vif, const u8 *rx_gtk, u8 gtk_key_len,
 		    u8 cipher_mode);
 int wilc_set_pmkid_info(struct wilc_vif *vif, struct wilc_pmkid_attr *pmkid);
 int wilc_get_mac_address(struct wilc_vif *vif, u8 *mac_addr);
-int wilc_set_mac_address(struct wilc_vif *vif, u8 *mac_addr);
+int wilc_set_mac_address(struct wilc_vif *vif, const u8 *mac_addr);
 int wilc_set_join_req(struct wilc_vif *vif, u8 *bssid, const u8 *ies,
 		      size_t ies_len);
 int wilc_disconnect(struct wilc_vif *vif);
@@ -220,11 +208,6 @@ int wilc_get_tx_power(struct wilc_vif *vif, u8 *tx_power);
 void wilc_set_wowlan_trigger(struct wilc_vif *vif, bool enabled);
 int wilc_set_external_auth_param(struct wilc_vif *vif,
 				 struct cfg80211_external_auth_params *param);
-/* 0 select antenna 1 , 2 select antenna mode , 2 allow the firmware to choose
- * the best antenna
- */
-int wilc_set_antenna(struct wilc_vif *vif, u8 mode);
-int handle_scan_done(struct wilc_vif *vif, enum scan_event evt);
 void wilc_scan_complete_received(struct wilc *wilc, u8 *buffer, u32 length);
 void wilc_network_info_received(struct wilc *wilc, u8 *buffer, u32 length);
 void wilc_gnrl_async_info_received(struct wilc *wilc, u8 *buffer, u32 length);
@@ -232,8 +215,6 @@ struct wilc_join_bss_param *
 wilc_parse_join_bss_param(struct cfg80211_bss *bss,
 			  struct cfg80211_crypto_settings *crypto);
 int wilc_set_default_mgmt_key_index(struct wilc_vif *vif, u8 index);
-
 void wilc_handle_disconnect(struct wilc_vif *vif);
-int wilc_of_parse_power_pins(struct wilc *wilc);
-void wilc_wlan_power(struct wilc *wilc, bool on);
+
 #endif

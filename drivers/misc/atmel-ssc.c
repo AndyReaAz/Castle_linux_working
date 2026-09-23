@@ -96,6 +96,12 @@ static struct atmel_ssc_platform_data at91sam9g45_config = {
 	.has_fslen_ext = 1,
 };
 
+static struct atmel_ssc_platform_data microchip_sama7d65_config = {
+	.use_dma = 1,
+	.has_fslen_ext = 1,
+	.direct_path = true,
+};
+
 static const struct platform_device_id atmel_ssc_devtypes[] = {
 	{
 		.name = "at91rm9200_ssc",
@@ -106,6 +112,9 @@ static const struct platform_device_id atmel_ssc_devtypes[] = {
 	}, {
 		.name = "at91sam9g45_ssc",
 		.driver_data = (unsigned long) &at91sam9g45_config,
+	}, {
+		.name = "mchp_sama7d65_ssc",
+		.driver_data = (unsigned long) &microchip_sama7d65_config,
 	}, {
 		/* sentinel */
 	}
@@ -122,6 +131,9 @@ static const struct of_device_id atmel_ssc_dt_ids[] = {
 	}, {
 		.compatible = "atmel,at91sam9g45-ssc",
 		.data = &at91sam9g45_config,
+	}, {
+		.compatible = "microchip,sama7d65-ssc",
+		.data = &microchip_sama7d65_config,
 	}, {
 		/* sentinel */
 	}
@@ -153,7 +165,7 @@ static int ssc_sound_dai_probe(struct ssc_device *ssc)
 
 	ssc->sound_dai = false;
 
-	if (!of_property_read_bool(np, "#sound-dai-cells"))
+	if (!of_property_present(np, "#sound-dai-cells"))
 		return 0;
 
 	id = of_alias_get_id(np, "ssc");
@@ -176,7 +188,7 @@ static void ssc_sound_dai_remove(struct ssc_device *ssc)
 #else
 static inline int ssc_sound_dai_probe(struct ssc_device *ssc)
 {
-	if (of_property_read_bool(ssc->pdev->dev.of_node, "#sound-dai-cells"))
+	if (of_property_present(ssc->pdev->dev.of_node, "#sound-dai-cells"))
 		return -ENOTSUPP;
 
 	return 0;
@@ -192,6 +204,7 @@ static int ssc_probe(struct platform_device *pdev)
 	struct resource *regs;
 	struct ssc_device *ssc;
 	const struct atmel_ssc_platform_data *plat_dat;
+	struct device_node *np;
 
 	ssc = devm_kzalloc(&pdev->dev, sizeof(struct ssc_device), GFP_KERNEL);
 	if (!ssc) {
@@ -248,10 +261,18 @@ static int ssc_probe(struct platform_device *pdev)
 	if (ssc_sound_dai_probe(ssc))
 		dev_err(&pdev->dev, "failed to auto-setup ssc for audio\n");
 
+	if (ssc->pdata->direct_path) {
+		np = of_find_node_with_property(NULL, "microchip,disable-direct-path");
+		if (np) {
+			ssc->pdata->direct_path = false;
+			of_node_put(np);
+		}
+	}
+
 	return 0;
 }
 
-static int ssc_remove(struct platform_device *pdev)
+static void ssc_remove(struct platform_device *pdev)
 {
 	struct ssc_device *ssc = platform_get_drvdata(pdev);
 
@@ -260,8 +281,6 @@ static int ssc_remove(struct platform_device *pdev)
 	mutex_lock(&user_lock);
 	list_del(&ssc->list);
 	mutex_unlock(&user_lock);
-
-	return 0;
 }
 
 static struct platform_driver ssc_driver = {

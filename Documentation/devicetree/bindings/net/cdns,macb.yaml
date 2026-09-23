@@ -38,7 +38,10 @@ properties:
               - cdns,sam9x60-macb     # Microchip sam9x60 SoC
               - microchip,mpfs-macb   # Microchip PolarFire SoC
           - const: cdns,macb          # Generic
-
+      - items:
+          - const: microchip,pic64gx-macb # Microchip PIC64GX SoC
+          - const: microchip,mpfs-macb    # Microchip PolarFire SoC
+          - const: cdns,macb              # Generic
       - items:
           - enum:
               - atmel,sama5d3-macb    # 10/100Mbit IP on Atmel sama5d3 SoCs
@@ -54,6 +57,7 @@ properties:
           - cdns,np4-macb             # NP4 SoC devices
           - microchip,sama7g5-emac    # Microchip SAMA7G5 ethernet interface
           - microchip,sama7g5-gem     # Microchip SAMA7G5 gigabit ethernet interface
+          - raspberrypi,rp1-gem       # Raspberry Pi RP1 gigabit ethernet interface
           - sifive,fu540-c000-gem     # SiFive FU540-C000 SoC
           - cdns,emac                 # Generic
           - cdns,gem                  # Generic
@@ -62,7 +66,16 @@ properties:
       - items:
           - enum:
               - microchip,sam9x7-gem     # Microchip SAM9X7 gigabit ethernet interface
+              - microchip,sama7d65-gem   # Microchip SAMA7D65 gigabit ethernet interface
           - const: microchip,sama7g5-gem # Microchip SAMA7G5 gigabit ethernet interface
+
+      - items:
+          - const: microchip,pic64hpsc-gem # Microchip PIC64-HPSC
+          - const: cdns,gem
+      - items:
+          - const: microchip,pic64hx-gem   # Microchip PIC64HX
+          - const: microchip,pic64hpsc-gem # Microchip PIC64-HPSC
+          - const: cdns,gem
 
   reg:
     minItems: 1
@@ -84,7 +97,7 @@ properties:
     items:
       - enum: [ ether_clk, hclk, pclk ]
       - enum: [ hclk, pclk ]
-      - const: tx_clk
+      - enum: [ tx_clk, tsu_clk ]
       - enum: [ rx_clk, tsu_clk ]
       - const: tsu_clk
 
@@ -115,6 +128,13 @@ properties:
 
   power-domains:
     maxItems: 1
+
+  cdns,refclk-ext:
+    type: boolean
+    description:
+      This selects if the REFCLK for RMII is provided by an external source.
+      For RGMII mode this selects if the 125MHz REF clock is provided by an external
+      source.
 
   cdns,rx-watermark:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -148,6 +168,7 @@ patternProperties:
 
       magic-packet:
         type: boolean
+        deprecated: true
         description:
           Indicates that the hardware supports waking up via magic packet.
 
@@ -175,6 +196,17 @@ allOf:
         reg:
           maxItems: 1
 
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: microchip,pic64hpsc-gem
+    then:
+      patternProperties:
+        "^ethernet-phy@[0-9a-f]$": false
+      properties:
+        mdio: false
+
 unevaluatedProperties: false
 
 examples:
@@ -198,7 +230,6 @@ examples:
     };
 
   - |
-    #include <dt-bindings/clock/xlnx-zynqmp-clk.h>
     #include <dt-bindings/power/xlnx-zynqmp-power.h>
     #include <dt-bindings/reset/xlnx-zynqmp-resets.h>
     #include <dt-bindings/phy/phy.h>
@@ -211,9 +242,9 @@ examples:
                     interrupt-parent = <&gic>;
                     interrupts = <0 59 4>, <0 59 4>;
                     reg = <0x0 0xff0c0000 0x0 0x1000>;
-                    clocks = <&zynqmp_clk LPD_LSBUS>, <&zynqmp_clk GEM1_REF>,
-                             <&zynqmp_clk GEM1_TX>, <&zynqmp_clk GEM1_RX>,
-                             <&zynqmp_clk GEM_TSU>;
+                    clocks = <&zynqmp_clk 31>, <&zynqmp_clk 105>,
+                             <&zynqmp_clk 51>, <&zynqmp_clk 50>,
+                             <&zynqmp_clk 44>;
                     clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
                     #address-cells = <1>;
                     #size-cells = <0>;

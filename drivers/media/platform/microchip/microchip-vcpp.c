@@ -10,6 +10,7 @@
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/dma-map-ops.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -19,6 +20,7 @@
 #include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/of_address.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/videodev2.h>
@@ -70,12 +72,13 @@
 #define MCHP_VCPP_BUFF_ADDR_FIFO_DATA		0x1C
 #define MCHP_VCPP_BUFF_ADDR_FIFO_RDATA_COUNT	0x20
 #define MCHP_VCPP_FRAME_SIZE_FIFO_DATA_RD	0x24
-#define MCHP_VCPP_FRAME_SIZE_FIFO_WDATA_COUNT	0x28
+#define MCHP_VCPP_MEDIA_PIPE_START		0x28
+#define MCHP_VCPP_MEDIA_PIPE_START_0		BIT(0)
 
 #define MCHP_VCPP_FRAME_START			0x1
 #define MCHP_VCPP_FRAME_STOP			0x0
 
-#define MCHP_VCPP_MAX_FRAMES			32
+#define MCHP_VCPP_MAX_FRAMES			8
 
 /* The compression ratio is calculated for every 60 frames */
 #define MCHP_VCPP_CR_MAX_FRAMES_RESET_COUNT	60
@@ -86,6 +89,9 @@
 
 /* Minimum wait time for camera to stabilize */
 #define MCHP_VCPP_DELAYED_CAM_M_SEC		100
+
+#define MCHP_VCPP_POLL_TIMEOUT_U_SEC		500000
+#define MCHP_VCPP_POLL_SLEEP_U_SEC		10000
 
 enum mchp_vcpp_state {
 	VCPP_STOPPED = 0,
@@ -107,16 +113,6 @@ struct mchp_vcpp_buffer {
 	dma_addr_t paddr;
 	size_t size;
 	bool prepared;
-};
-
-/**
- * struct mchp_vcpp_cam_buffer - camera dma buffers and size
- * @paddr:	camera stream base address
- * @size:	size of buffer
- */
-struct mchp_vcpp_cam_buffer {
-	dma_addr_t paddr;
-	size_t size;
 };
 
 /**
@@ -156,6 +152,7 @@ struct mchp_vcpp_compression_ratio {
  * @state:		state of buffers
  * @irq:		external IRQ for new frame
  * @sequence:		frame sequence counter
+ * @dma_stop:		dma state stopping/ready to run
  */
 struct mchp_vcpp_fpga {
 	void __iomem *base;
@@ -173,7 +170,6 @@ struct mchp_vcpp_fpga {
 	spinlock_t qlock;
 	struct list_head buf_list;
 	struct list_head subdev_entities;
-	struct mchp_vcpp_cam_buffer cambuf;
 	struct v4l2_async_notifier notifier;
 	struct media_device mdev;
 	struct media_pad vid_cap_pad;
@@ -183,6 +179,7 @@ struct mchp_vcpp_fpga {
 	enum mchp_vcpp_state state;
 	int irq;
 	int sequence;
+	bool dma_stop;
 };
 
 struct mchp_vcpp_graph_entity {
@@ -242,7 +239,9 @@ mchp_vcpp_remote_subdev(struct media_pad *local, u32 *pad)
 
 static int mchp_vcpp_verify_format(struct mchp_vcpp_fpga *mchp_vcpp)
 {
-	struct v4l2_subdev_format fmt;
+	struct v4l2_subdev_format fmt= {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	struct v4l2_subdev *subdev;
 	int ret;
 
@@ -250,7 +249,6 @@ static int mchp_vcpp_verify_format(struct mchp_vcpp_fpga *mchp_vcpp)
 	if (!subdev)
 		return -EPIPE;
 
-	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &fmt);
 	if (ret < 0)
 		return ret == -ENOIOCTLCMD ? -EINVAL : ret;
@@ -337,7 +335,9 @@ static irqreturn_t mchp_vcpp_irq_thread_fn(int irq, void *dev_id)
 	struct mchp_vcpp_buffer *buf;
 	struct v4l2_pix_format *pix = &mchp_vcpp->format.fmt.pix;
 	struct mchp_vcpp_compression_ratio *h264_ratio = &mchp_vcpp->h264_ratio;
-	struct v4l2_subdev_format fmt;
+	struct v4l2_subdev_format fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	struct v4l2_subdev *subdev;
 	int ret, buf_size, i;
 	int *frame_size_index = &h264_ratio->frame_size_index;
@@ -361,7 +361,9 @@ static irqreturn_t mchp_vcpp_irq_thread_fn(int irq, void *dev_id)
 
 	if (mchp_vcpp->fmtinfo->fourcc == V4L2_PIX_FMT_H264) {
 		buf_size = readl_relaxed(mchp_vcpp->base + MCHP_VCPP_FRAME_SIZE_FIFO_DATA_RD);
+		spin_lock_irq(&mchp_vcpp->qlock);
 		mchp_vcpp_buffer_done(mchp_vcpp, buf, buf_size, 0);
+		spin_unlock_irq(&mchp_vcpp->qlock);
 		h264_ratio->frame_count++;
 		h264_ratio->frame_size[*frame_size_index] += buf_size;
 
@@ -381,7 +383,6 @@ static irqreturn_t mchp_vcpp_irq_thread_fn(int irq, void *dev_id)
 			if (!subdev)
 				return -EPIPE;
 
-			fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 			ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &fmt);
 			if (ret < 0)
 				return ret == -ENOIOCTLCMD ? -EINVAL : ret;
@@ -397,8 +398,10 @@ static irqreturn_t mchp_vcpp_irq_thread_fn(int irq, void *dev_id)
 			h264_ratio->frame_size[*frame_size_index] = 0;
 		}
 	} else {
+		spin_lock_irq(&mchp_vcpp->qlock);
 		mchp_vcpp_buffer_done(mchp_vcpp, buf,
 				      pix->width * pix->height * mchp_vcpp->fmtinfo->bpp, 0);
+		spin_unlock_irq(&mchp_vcpp->qlock);
 	}
 
 	spin_lock_irq(&mchp_vcpp->qlock);
@@ -513,6 +516,9 @@ static void mchp_vcpp_buffer_queue(struct vb2_buffer *vb)
 	struct mchp_vcpp_buffer *buf =
 				container_of(vbuf, struct mchp_vcpp_buffer, vb);
 
+	if (mchp_vcpp->dma_stop)
+		return;
+
 	spin_lock_irq(&mchp_vcpp->qlock);
 	list_add_tail(&buf->list, &mchp_vcpp->buf_list);
 	if (mchp_vcpp->state == VCPP_WAIT_FOR_BUFFER) {
@@ -563,6 +569,7 @@ static int mchp_vcpp_start_streaming(struct vb2_queue *vq, unsigned int count)
 		return ret;
 	}
 
+	writel_relaxed(MCHP_VCPP_MEDIA_PIPE_START_0, mchp_vcpp->base + MCHP_VCPP_MEDIA_PIPE_START);
 	writel_relaxed(MCHP_VCPP_GLBL_INT_EN_BIT, mchp_vcpp->base + MCHP_VCPP_GLBL_INT_EN);
 	writel_relaxed(MCHP_VCPP_INT_EN_EOF, mchp_vcpp->base + MCHP_VCPP_INT_EN);
 
@@ -573,16 +580,6 @@ static int mchp_vcpp_start_streaming(struct vb2_queue *vq, unsigned int count)
 	writel_relaxed(MCHP_VCPP_FRAME_START, mchp_vcpp->base + MCHP_VCPP_CTRL_REG);
 
 	mchp_vcpp->sequence = 0;
-
-	ret = request_threaded_irq(mchp_vcpp->irq, mchp_vcpp_irq_ext,
-				   mchp_vcpp_irq_thread_fn, IRQF_NO_SUSPEND,
-				   KBUILD_MODNAME, mchp_vcpp);
-
-	if (ret) {
-		dev_err(mchp_vcpp->dev, "request threaded irq failed %d\n",
-			ret);
-		goto err_free_buffers;
-	}
 
 	spin_lock_irq(&mchp_vcpp->qlock);
 
@@ -608,13 +605,31 @@ err_free_buffers:
 	return ret;
 }
 
+static void mchp_vcpp_wait_dma_transaction_complete(struct mchp_vcpp_fpga *mchp_vcpp)
+{
+	unsigned long sleep_us = MCHP_VCPP_POLL_SLEEP_U_SEC;
+	u64 timeout_us = MCHP_VCPP_POLL_TIMEOUT_U_SEC;
+
+	ktime_t timeout = ktime_add_us(ktime_get(), timeout_us);
+
+	while (mchp_vcpp->state != VCPP_WAIT_FOR_BUFFER) {
+		if (ktime_compare(ktime_get(), timeout) > 0)
+			break;
+
+		usleep_range((sleep_us >> 2) + 1, sleep_us);
+		cpu_relax();
+	}
+}
+
 static void mchp_vcpp_stop_streaming(struct vb2_queue *vq)
 {
 	struct mchp_vcpp_fpga *mchp_vcpp = vb2_get_drv_priv(vq);
 
-	writel_relaxed(MCHP_VCPP_FRAME_STOP, mchp_vcpp->base + MCHP_VCPP_CTRL_REG);
+	mchp_vcpp->dma_stop = 1;
 
-	free_irq(mchp_vcpp->irq, mchp_vcpp);
+	mchp_vcpp_wait_dma_transaction_complete(mchp_vcpp);
+
+	writel_relaxed(MCHP_VCPP_FRAME_STOP, mchp_vcpp->base + MCHP_VCPP_CTRL_REG);
 
 	spin_lock_irq(&mchp_vcpp->qlock);
 
@@ -628,6 +643,8 @@ static void mchp_vcpp_stop_streaming(struct vb2_queue *vq)
 	writel_relaxed(MCHP_VCPP_CORE_RESET, mchp_vcpp->base + MCHP_VCPP_CTRL_REG);
 
 	mchp_vcpp_pipeline_set_stream(mchp_vcpp, false);
+
+	mchp_vcpp->dma_stop = 0;
 }
 
 static const struct vb2_ops mchp_vcpp_qops = {
@@ -655,7 +672,9 @@ static void __mchp_vcpp_try_format(struct mchp_vcpp_fpga *mchp_vcpp,
 				   const struct mvideo_format **fmtinfo)
 {
 	const struct mvideo_format *info;
-	struct v4l2_subdev_format v4l_fmt;
+	struct v4l2_subdev_format v4l_fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	struct v4l2_subdev *subdev;
 	unsigned int ret;
 
@@ -663,7 +682,6 @@ static void __mchp_vcpp_try_format(struct mchp_vcpp_fpga *mchp_vcpp,
 	if (!subdev)
 		return;
 
-	v4l_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &v4l_fmt);
 	if (ret < 0)
 		return;
@@ -735,7 +753,9 @@ static int mchp_vcpp_enum_fmt_vid_cap(struct file *file, void *priv,
 {
 	struct mchp_vcpp_fpga *mchp_vcpp = video_drvdata(file);
 	struct v4l2_subdev *subdev;
-	struct v4l2_subdev_format v4l_fmt;
+	struct v4l2_subdev_format v4l_fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
 	const struct mvideo_format *mvideo_fmt;
 	int ret;
 
@@ -744,7 +764,6 @@ static int mchp_vcpp_enum_fmt_vid_cap(struct file *file, void *priv,
 	if (!subdev)
 		return -EPIPE;
 
-	v4l_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &v4l_fmt);
 	if (ret < 0)
 		return ret == -ENOIOCTLCMD ? -EINVAL : ret;
@@ -790,6 +809,17 @@ static int mchp_vcpp_g_input(struct file *file, void *priv, unsigned int *index)
 	return 0;
 }
 
+static int mchp_vb2_ioctl_reqbufs(struct file *file, void *priv,
+				  struct v4l2_requestbuffers *p)
+{
+	struct mchp_vcpp_fpga *mchp_vcpp = video_drvdata(file);
+
+	if (!dev_is_dma_coherent(mchp_vcpp->dev))
+		p->flags |= V4L2_MEMORY_FLAG_NON_COHERENT;
+
+	return vb2_ioctl_reqbufs(file, priv, p);
+}
+
 static int mchp_vcpp_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	if (ctrl->id != MCHP_CID_COMPRESSION_RATIO)
@@ -826,7 +856,7 @@ static const struct v4l2_ioctl_ops mchp_vcpp_ioctl_ops = {
 	.vidioc_g_input = mchp_vcpp_g_input,
 	.vidioc_s_input = mchp_vcpp_s_input,
 
-	.vidioc_reqbufs = vb2_ioctl_reqbufs,
+	.vidioc_reqbufs = mchp_vb2_ioctl_reqbufs,
 	.vidioc_create_bufs = vb2_ioctl_create_bufs,
 	.vidioc_querybuf = vb2_ioctl_querybuf,
 	.vidioc_qbuf = vb2_ioctl_qbuf,
@@ -1069,7 +1099,7 @@ static void mchp_vcpp_set_default_format(struct mchp_vcpp_fpga *mchp_vcpp)
 
 	pix = &mchp_vcpp->format.fmt.pix;
 	pix->pixelformat = mchp_vcpp->fmtinfo->fourcc;
-	pix->colorspace = V4L2_COLORSPACE_RAW;
+	pix->colorspace = V4L2_COLORSPACE_SRGB;
 	pix->field = V4L2_FIELD_NONE;
 	pix->width = MCHP_VCPP_DEF_WIDTH;
 	pix->height = MCHP_VCPP_DEF_HEIGHT;
@@ -1224,9 +1254,15 @@ static int mchp_vcpp_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, mchp_vcpp->irq,
 				     "could not get irq\n");
 
-	ret = clk_bulk_get(&pdev->dev, num_clks, mchp_vcpp->clks);
+	ret = devm_request_threaded_irq(&pdev->dev, mchp_vcpp->irq, mchp_vcpp_irq_ext,
+					mchp_vcpp_irq_thread_fn, IRQF_NO_SUSPEND,
+					KBUILD_MODNAME, mchp_vcpp);
 	if (ret)
-		return ret;
+		return dev_err_probe(&pdev->dev, ret, "request threaded irq failed\n");
+
+	ret = devm_clk_bulk_get(&pdev->dev, num_clks, mchp_vcpp->clks);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "clk get failed\n");
 
 	ret = clk_bulk_prepare_enable(num_clks, mchp_vcpp->clks);
 	if (ret)
@@ -1252,7 +1288,7 @@ static int mchp_vcpp_probe(struct platform_device *pdev)
 
 	ret = v4l2_device_register(&pdev->dev, &mchp_vcpp->v4l2_dev);
 	if (ret)
-		return ret;
+		goto err_clk_disable;
 
 	ctrl_hdlr = &mchp_vcpp->ctrl_handler;
 
@@ -1317,15 +1353,14 @@ static int mchp_vcpp_probe(struct platform_device *pdev)
 	vb2_q->buf_struct_size = sizeof(struct mchp_vcpp_buffer);
 	vb2_q->ops = &mchp_vcpp_qops;
 	vb2_q->mem_ops = &vb2_dma_contig_memops;
-	vb2_q->gfp_flags = GFP_DMA32;
+	vb2_q->allow_cache_hints = 1;
 	vb2_q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-	vb2_q->min_buffers_needed = 2;
 	vb2_q->lock = &mchp_vcpp->lock;
 
 	ret = vb2_queue_init(vb2_q);
 	if (ret) {
 		dev_err(mchp_vcpp->dev, "vb2 queue init failed %d\n", ret);
-		goto v4l2_unregister;
+		goto video_unregister;
 	}
 
 	v4l2_async_nf_init(&mchp_vcpp->notifier, &mchp_vcpp->v4l2_dev);
@@ -1333,8 +1368,20 @@ static int mchp_vcpp_probe(struct platform_device *pdev)
 	ret = mchp_vcpp_graph_init(mchp_vcpp);
 	if (ret < 0) {
 		dev_err(mchp_vcpp->dev, "mchp dscmi graph init failed %d\n", ret);
-		goto v4l2_unregister;
+		goto video_unregister;
 	}
+
+	ret = of_reserved_mem_device_init(&pdev->dev);
+	if (ret)
+		dev_dbg(&pdev->dev, "of_reserved_mem_device_init: %d\n", ret);
+
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_err(&pdev->dev, "dma_set_mask_and_coherent: %d\n", ret);
+		goto video_unregister;
+	}
+
+	mchp_vcpp->dma_stop = 0;
 
 	platform_set_drvdata(pdev, mchp_vcpp);
 
@@ -1342,16 +1389,20 @@ static int mchp_vcpp_probe(struct platform_device *pdev)
 
 	return 0;
 
+video_unregister:
+	video_unregister_device(&mchp_vcpp->vdev);
 v4l2_unregister:
 	mutex_destroy(&mchp_vcpp->lock);
 	v4l2_device_unregister(&mchp_vcpp->v4l2_dev);
+err_clk_disable:
+	clk_bulk_disable_unprepare(num_clks, mchp_vcpp->clks);
 err_clk_put:
 	clk_bulk_put(num_clks, mchp_vcpp->clks);
 
 	return ret;
 }
 
-static int mchp_vcpp_remove(struct platform_device *pdev)
+static void mchp_vcpp_remove(struct platform_device *pdev)
 {
 	struct v4l2_device *v4l2_dev = platform_get_drvdata(pdev);
 	struct mchp_vcpp_fpga *mchp_vcpp = container_of(v4l2_dev,
@@ -1362,11 +1413,10 @@ static int mchp_vcpp_remove(struct platform_device *pdev)
 	mutex_destroy(&mchp_vcpp->lock);
 	v4l2_async_nf_unregister(&mchp_vcpp->notifier);
 	v4l2_async_nf_cleanup(&mchp_vcpp->notifier);
+	video_unregister_device(&mchp_vcpp->vdev);
 	v4l2_device_unregister(&mchp_vcpp->v4l2_dev);
 	clk_bulk_disable_unprepare(num_clks, mchp_vcpp->clks);
 	clk_bulk_put(num_clks, mchp_vcpp->clks);
-
-	return 0;
 }
 
 static const struct of_device_id mchp_vcpp_of_match[] = {

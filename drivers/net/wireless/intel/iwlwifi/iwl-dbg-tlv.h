@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2018-2023 Intel Corporation
+ * Copyright (C) 2018-2023, 2025 Intel Corporation
  */
 #ifndef __iwl_dbg_tlv_h__
 #define __iwl_dbg_tlv_h__
@@ -32,7 +32,7 @@ union iwl_dbg_tlv_tp_data {
 };
 
 /**
- * struct iwl_dbg_tlv_time_point_data
+ * struct iwl_dbg_tlv_time_point_data - debug time point data
  * @trig_list: list of triggers
  * @active_trig_list: list of active triggers
  * @hcmd_list: list of host commands
@@ -57,6 +57,7 @@ void _iwl_dbg_tlv_time_point(struct iwl_fw_runtime *fwrt,
 			     enum iwl_fw_ini_time_point tp_id,
 			     union iwl_dbg_tlv_tp_data *tp_data,
 			     bool sync);
+void iwl_dbg_tlv_init_cfg(struct iwl_fw_runtime *fwrt);
 
 static inline void iwl_dbg_tlv_time_point(struct iwl_fw_runtime *fwrt,
 					  enum iwl_fw_ini_time_point tp_id,

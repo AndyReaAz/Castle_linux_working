@@ -474,7 +474,7 @@ err_put_rproc:
 	return ret;
 }
 
-static int miv_rproc_remove(struct platform_device *pdev)
+static void miv_rproc_remove(struct platform_device *pdev)
 {
 	struct rproc *rproc = platform_get_drvdata(pdev);
 	struct miv_rproc *priv = rproc->priv;
@@ -483,8 +483,6 @@ static int miv_rproc_remove(struct platform_device *pdev)
 	miv_rproc_free_mbox(rproc);
 	destroy_workqueue(priv->workqueue);
 	rproc_free(rproc);
-
-	return 0;
 }
 
 static const struct of_device_id miv_rproc_of_match[] __maybe_unused = {

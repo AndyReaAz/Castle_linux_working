@@ -9,7 +9,8 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
-#include <asm/patch.h>
+#include <asm/text-patching.h>
+#include <asm/cfi.h>
 #include "bpf_jit.h"
 
 /* Number of iterations to try until offsets converge. */
@@ -25,9 +26,8 @@ static int build_body(struct rv_jit_context *ctx, bool extra_pass, int *offset)
 		int ret;
 
 		ret = bpf_jit_emit_insn(insn, ctx, extra_pass);
-		/* BPF_LD | BPF_IMM | BPF_DW: skip the next instruction. */
 		if (ret > 0)
-			i++;
+			i++; /* skip the next instruction */
 		if (offset)
 			offset[i] = ctx->ninsns;
 		if (ret < 0)
@@ -79,6 +79,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		goto skip_init_ctx;
 	}
 
+	ctx->arena_vm_start = bpf_arena_get_kern_vm_start(prog->aux->arena);
+	ctx->user_vm_start = bpf_arena_get_user_vm_start(prog->aux->arena);
 	ctx->prog = prog;
 	ctx->offset = kcalloc(prog->len, sizeof(int), GFP_KERNEL);
 	if (!ctx->offset) {
@@ -100,7 +102,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		pass++;
 		ctx->ninsns = 0;
 
-		bpf_jit_build_prologue(ctx);
+		bpf_jit_build_prologue(ctx, bpf_is_subprog(prog));
 		ctx->prologue_len = ctx->ninsns;
 
 		if (build_body(ctx, extra_pass, ctx->offset)) {
@@ -160,7 +162,7 @@ skip_init_ctx:
 	ctx->ninsns = 0;
 	ctx->nexentries = 0;
 
-	bpf_jit_build_prologue(ctx);
+	bpf_jit_build_prologue(ctx, bpf_is_subprog(prog));
 	if (build_body(ctx, extra_pass, NULL)) {
 		prog = orig_prog;
 		goto out_free_hdr;
@@ -170,25 +172,17 @@ skip_init_ctx:
 	if (bpf_jit_enable > 1)
 		bpf_jit_dump(prog->len, prog_size, pass, ctx->insns);
 
-	prog->bpf_func = (void *)ctx->ro_insns;
+	prog->bpf_func = (void *)ctx->ro_insns + cfi_get_offset();
 	prog->jited = 1;
-	prog->jited_len = prog_size;
+	prog->jited_len = prog_size - cfi_get_offset();
 
 	if (!prog->is_func || extra_pass) {
-		if (WARN_ON(bpf_jit_binary_pack_finalize(prog, jit_data->ro_header,
-							 jit_data->header))) {
+		if (WARN_ON(bpf_jit_binary_pack_finalize(jit_data->ro_header, jit_data->header))) {
 			/* ro_header has been freed */
 			jit_data->ro_header = NULL;
 			prog = orig_prog;
 			goto out_offset;
 		}
-		/*
-		 * The instructions have now been copied to the ROX region from
-		 * where they will execute.
-		 * Write any modified data cache blocks out to memory and
-		 * invalidate the corresponding blocks in the instruction cache.
-		 */
-		bpf_flush_icache(jit_data->ro_header, ctx->ro_insns + ctx->ninsns);
 		for (i = 0; i < prog->len; i++)
 			ctx->offset[i] = ninsns_rvoff(ctx->offset[i]);
 		bpf_prog_fill_jited_linfo(prog, ctx->offset);
@@ -216,19 +210,6 @@ out_free_hdr:
 u64 bpf_jit_alloc_exec_limit(void)
 {
 	return BPF_JIT_REGION_SIZE;
-}
-
-void *bpf_jit_alloc_exec(unsigned long size)
-{
-	return __vmalloc_node_range(size, PAGE_SIZE, BPF_JIT_REGION_START,
-				    BPF_JIT_REGION_END, GFP_KERNEL,
-				    PAGE_KERNEL, 0, NUMA_NO_NODE,
-				    __builtin_return_address(0));
-}
-
-void bpf_jit_free_exec(void *addr)
-{
-	return vfree(addr);
 }
 
 void *bpf_arch_text_copy(void *dst, void *src, size_t len)
@@ -268,7 +249,7 @@ void bpf_jit_free(struct bpf_prog *prog)
 		 * before freeing it.
 		 */
 		if (jit_data) {
-			bpf_jit_binary_pack_finalize(prog, jit_data->ro_header, jit_data->header);
+			bpf_jit_binary_pack_finalize(jit_data->ro_header, jit_data->header);
 			kfree(jit_data);
 		}
 		hdr = bpf_jit_binary_pack_hdr(prog);

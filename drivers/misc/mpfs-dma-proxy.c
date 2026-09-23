@@ -269,7 +269,7 @@ static int mpfs_dma_proxy_create_channel(struct platform_device *pdev,
 	int ret;
 
 	channel->dma_device = &pdev->dev;
-	channel->channel = dma_request_slave_channel(&pdev->dev, name);
+	channel->channel = dma_request_chan(&pdev->dev, name);
 	if (IS_ERR(channel->channel)) {
 		return dev_err_probe(channel->dma_device, PTR_ERR(channel->channel),
 				     "Failed to request DMA channel\n");
@@ -319,7 +319,7 @@ static int mpfs_dma_proxy_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int ret, i;
 
-	dma_proxy = devm_kmalloc(dev, sizeof(struct mpfs_dma_proxy), GFP_KERNEL);
+	dma_proxy = devm_kzalloc(dev, sizeof(struct mpfs_dma_proxy), GFP_KERNEL);
 	if (IS_ERR(dma_proxy))
 		return dev_err_probe(dev, PTR_ERR(dma_proxy), "Could not allocate proxy device\n");
 
@@ -375,14 +375,13 @@ cleanup_channels:
 	return ret;
 }
 
-static int mpfs_dma_proxy_remove(struct platform_device *pdev)
+static void mpfs_dma_proxy_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct mpfs_dma_proxy *dma_proxy = dev_get_drvdata(dev);
 
 	mpfs_dma_proxy_cleanup_channels(dma_proxy);
 
-	return 0;
 }
 
 static const struct of_device_id mpfs_dma_proxy_of_ids[] = {

@@ -29,8 +29,8 @@ static int __find_debuginfo(Dwfl_Module *mod __maybe_unused, void **userdata,
 	const struct dso *dso = *userdata;
 
 	assert(dso);
-	if (dso->symsrc_filename && strcmp (file_name, dso->symsrc_filename))
-		*debuginfo_file_name = strdup(dso->symsrc_filename);
+	if (dso__symsrc_filename(dso) && strcmp(file_name, dso__symsrc_filename(dso)))
+		*debuginfo_file_name = strdup(dso__symsrc_filename(dso));
 	return -1;
 }
 
@@ -66,7 +66,7 @@ static int __report_module(struct addr_location *al, u64 ip,
 	 * a different code in another DSO.  So just use the map->start
 	 * directly to pick the correct one.
 	 */
-	if (!strncmp(dso->long_name, "/tmp/jitted-", 12))
+	if (!strncmp(dso__long_name(dso), "/tmp/jitted-", 12))
 		base = map__start(al->map);
 	else
 		base = map__start(al->map) - map__pgoff(al->map);
@@ -83,15 +83,18 @@ static int __report_module(struct addr_location *al, u64 ip,
 	if (!mod) {
 		char filename[PATH_MAX];
 
-		__symbol__join_symfs(filename, sizeof(filename), dso->long_name);
-		mod = dwfl_report_elf(ui->dwfl, dso->short_name, filename, -1,
-				      base, false);
+		__symbol__join_symfs(filename, sizeof(filename), dso__long_name(dso));
+		/* Don't hang up on device files like /dev/dri/renderD128. */
+		if (is_regular_file(filename)) {
+			mod = dwfl_report_elf(ui->dwfl, dso__short_name(dso), filename, -1,
+					      base, false);
+		}
 	}
 	if (!mod) {
 		char filename[PATH_MAX];
 
 		if (dso__build_id_filename(dso, filename, sizeof(filename), false))
-			mod = dwfl_report_elf(ui->dwfl, dso->short_name, filename, -1,
+			mod = dwfl_report_elf(ui->dwfl, dso__short_name(dso), filename, -1,
 					      base, false);
 	}
 
@@ -133,8 +136,8 @@ static int entry(u64 ip, struct unwind_info *ui)
 	}
 
 	e->ip	  = ip;
-	e->ms.maps = al.maps;
-	e->ms.map = al.map;
+	e->ms.maps = maps__get(al.maps);
+	e->ms.map = map__get(al.map);
 	e->ms.sym = al.sym;
 
 	pr_debug("unwind: %s:ip = 0x%" PRIx64 " (0x%" PRIx64 ")\n",
@@ -190,7 +193,10 @@ static bool memory_read(Dwfl *dwfl __maybe_unused, Dwarf_Addr addr, Dwarf_Word *
 	int offset;
 	int ret;
 
-	ret = perf_reg_value(&start, &ui->sample->user_regs,
+	if (!ui->sample->user_regs)
+		return false;
+
+	ret = perf_reg_value(&start, ui->sample->user_regs,
 			     perf_arch_reg_sp(arch));
 	if (ret)
 		return false;
@@ -263,7 +269,7 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
 	struct unwind_info *ui, ui_buf = {
 		.sample		= data,
 		.thread		= thread,
-		.machine	= RC_CHK_ACCESS(thread__maps(thread))->machine,
+		.machine	= maps__machine((thread__maps(thread))),
 		.cb		= cb,
 		.arg		= arg,
 		.max_stack	= max_stack,
@@ -273,7 +279,7 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
 	Dwarf_Word ip;
 	int err = -EINVAL, i;
 
-	if (!data->user_regs.regs)
+	if (!data->user_regs || !data->user_regs->regs)
 		return -EINVAL;
 
 	ui = zalloc(sizeof(ui_buf) + sizeof(ui_buf.entries[0]) * max_stack);
@@ -286,7 +292,7 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
 	if (!ui->dwfl)
 		goto out;
 
-	err = perf_reg_value(&ip, &data->user_regs, perf_arch_reg_ip(arch));
+	err = perf_reg_value(&ip, data->user_regs, perf_arch_reg_ip(arch));
 	if (err)
 		goto out;
 
@@ -318,6 +324,9 @@ int unwind__get_entries(unwind_entry_cb_t cb, void *arg,
  out:
 	if (err)
 		pr_debug("unwind: failed with '%s'\n", dwfl_errmsg(-1));
+
+	for (i = 0; i < ui->idx; i++)
+		map_symbol__exit(&ui->entries[i].ms);
 
 	dwfl_end(ui->dwfl);
 	free(ui);

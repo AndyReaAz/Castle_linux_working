@@ -13,12 +13,12 @@
 #include <net/ieee80211_radiotap.h>
 #include <linux/if_arp.h>
 #include <linux/gpio/consumer.h>
+#include <linux/rculist.h>
+#include <uapi/linux/if_ether.h>
 
 #include "hif.h"
 #include "wlan.h"
 #include "wlan_cfg.h"
-
-extern int wait_for_recovery;
 
 #define FLOW_CONTROL_LOWER_THRESHOLD		128
 #define FLOW_CONTROL_UPPER_THRESHOLD		256
@@ -31,9 +31,10 @@ extern int wait_for_recovery;
 
 #define TX_BACKOFF_WEIGHT_MS			1
 
-#define ANT_SWTCH_INVALID_GPIO_CTRL		0
-#define ANT_SWTCH_SNGL_GPIO_CTRL		1
-#define ANT_SWTCH_DUAL_GPIO_CTRL		2
+#define wilc_for_each_vif(w, v) \
+	struct wilc *_w = w; \
+	list_for_each_entry_srcu(v, &_w->vif_list, list, \
+				 srcu_read_lock_held(&_w->srcu))
 
 struct wilc_wfi_stats {
 	unsigned long rx_packets;
@@ -62,19 +63,6 @@ struct wilc_wfi_p2p_listen_params {
 	struct ieee80211_channel *listen_ch;
 	u32 listen_duration;
 	u64 listen_cookie;
-};
-
-/* Struct to buffer eapol 1/4 frame */
-struct wilc_buffered_eap {
-	unsigned int size;
-	unsigned int pkt_offset;
-	u8 *buff;
-};
-
-struct wilc_p2p_var {
-	u8 local_random;
-	u8 recv_random;
-	bool is_wilc_ie;
 };
 
 static const u32 wilc_cipher_suites[] = {
@@ -155,12 +143,9 @@ struct wilc_priv {
 
 	/* mutexes */
 	struct mutex scan_req_lock;
-
-	struct wilc_buffered_eap *buffered_eap;
-
-	struct timer_list eap_buff_timer;
+	bool p2p_listen_state;
 	int scanned_cnt;
-	struct wilc_p2p_var p2p;
+
 	u64 inc_roc_cookie;
 };
 
@@ -190,16 +175,6 @@ struct tcp_ack_filter {
 	bool enabled;
 };
 
-#define WILC_P2P_ROLE_GO	1
-#define WILC_P2P_ROLE_CLIENT	0
-
-struct sysfs_attr_group {
-	bool p2p_mode;
-	u8 ant_swtch_mode;
-	u8 antenna1;
-	u8 antenna2;
-};
-
 struct wilc_vif {
 	u8 idx;
 	u8 iftype;
@@ -211,27 +186,15 @@ struct wilc_vif {
 	u8 bssid[ETH_ALEN];
 	struct host_if_drv *hif_drv;
 	struct net_device *ndev;
-
+	struct timer_list during_ip_timer;
 	struct timer_list periodic_rssi;
 	struct rf_info periodic_stat;
 	struct tcp_ack_filter ack_filter;
 	bool connecting;
 	struct wilc_priv priv;
 	struct list_head list;
-	u8 restart;
-	bool p2p_listen_state;
 	struct cfg80211_bss *bss;
 	struct cfg80211_external_auth_params auth;
-};
-
-struct wilc_power_gpios {
-	int reset;
-	int chip_en;
-};
-
-struct wilc_power {
-	struct wilc_power_gpios gpios;
-	u8 status[DEV_MAX];
 };
 
 struct wilc_tx_queue_status {
@@ -250,6 +213,7 @@ struct wilc {
 	struct clk *rtc_clk;
 	bool initialized;
 	u32 chipid;
+	bool power_save_mode;
 	int dev_irq_num;
 	int close;
 	u8 vif_num;
@@ -257,6 +221,13 @@ struct wilc {
 
 	/* protect vif list */
 	struct mutex vif_mutex;
+	/* Sleepable RCU struct to manipulate vif list. Sleepable version is
+	 * needed over the classic RCU version because the driver's current
+	 * design involves some sleeping code while manipulating a vif
+	 * retrieved from vif list (so in a SRCU critical section), like:
+	 * - sending commands to the chip, using info from retrieved vif
+	 * - registering a new monitoring net device
+	 */
 	struct srcu_struct srcu;
 	u8 open_ifcs;
 
@@ -276,9 +247,8 @@ struct wilc {
 	struct completion sync_event;
 	struct completion txq_event;
 	struct completion txq_thread_started;
-	struct completion debug_thread_started;
+
 	struct task_struct *txq_thread;
-	struct task_struct *debug_thread;
 
 	int quit;
 
@@ -302,12 +272,7 @@ struct wilc {
 	const struct firmware *firmware;
 
 	struct device *dev;
-	struct device *dt_dev;
 
-	enum wilc_chip_type chip;
-	struct wilc_power power;
-	uint8_t keep_awake[DEV_MAX];
-	struct mutex cs;
 	struct workqueue_struct *hif_workqueue;
 	struct wilc_cfg cfg;
 	void *bus_data;
@@ -317,19 +282,18 @@ struct wilc {
 	struct mutex deinit_lock;
 	u8 sta_ch;
 	u8 op_ch;
-	struct sysfs_attr_group attr_sysfs;
 	struct ieee80211_channel channels[ARRAY_SIZE(wilc_2ghz_channels)];
 	struct ieee80211_rate bitrates[ARRAY_SIZE(wilc_bitrates)];
 	struct ieee80211_supported_band band;
 	u32 cipher_suites[ARRAY_SIZE(wilc_cipher_suites)];
+	u8 nv_mac_address[ETH_ALEN];
 };
 
 struct wilc_wfi_mon_priv {
 	struct net_device *real_ndev;
 };
 
-void wilc_frmw_to_host(struct wilc_vif *vif, u8 *buff, u32 size,
-		       u32 pkt_offset, u8 status);
+void wilc_frmw_to_host(struct wilc *wilc, u8 *buff, u32 size, u32 pkt_offset);
 void wilc_mac_indicate(struct wilc *wilc);
 void wilc_netdev_cleanup(struct wilc *wilc);
 void wilc_wfi_mgmt_rx(struct wilc *wilc, u8 *buff, u32 size, bool is_auth);
@@ -338,7 +302,4 @@ void wilc_wlan_set_bssid(struct net_device *wilc_netdev, const u8 *bssid,
 struct wilc_vif *wilc_netdev_ifc_init(struct wilc *wl, const char *name,
 				      int vif_type, enum nl80211_iftype type,
 				      bool rtnl_locked);
-int wilc_bt_power_up(struct wilc *wilc, int source);
-int wilc_bt_power_down(struct wilc *wilc, int source);
-
 #endif

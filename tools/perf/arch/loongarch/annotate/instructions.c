@@ -5,13 +5,12 @@
  * Copyright (C) 2020-2023 Loongson Technology Corporation Limited
  */
 
-static int loongarch_call__parse(struct arch *arch, struct ins_operands *ops, struct map_symbol *ms)
+static int loongarch_call__parse(struct arch *arch, struct ins_operands *ops, struct map_symbol *ms,
+		struct disasm_line *dl __maybe_unused)
 {
 	char *c, *endptr, *tok, *name;
 	struct map *map = ms->map;
-	struct addr_map_symbol target = {
-		.ms = { .map = map, },
-	};
+	struct addr_map_symbol target;
 
 	c = strchr(ops->raw, '#');
 	if (c++ == NULL)
@@ -37,12 +36,16 @@ static int loongarch_call__parse(struct arch *arch, struct ins_operands *ops, st
 	if (ops->target.name == NULL)
 		return -1;
 
-	target.addr = map__objdump_2mem(map, ops->target.addr);
+	target = (struct addr_map_symbol) {
+		.ms = { .map = map__get(map), },
+		.addr = map__objdump_2mem(map, ops->target.addr),
+	};
 
 	if (maps__find_ams(ms->maps, &target) == 0 &&
 	    map__rip_2objdump(target.ms.map, map__map_ip(target.ms.map, target.addr)) == ops->target.addr)
 		ops->target.sym = target.ms.sym;
 
+	addr_map_symbol__exit(&target);
 	return 0;
 }
 
@@ -51,20 +54,21 @@ static struct ins_ops loongarch_call_ops = {
 	.scnprintf = call__scnprintf,
 };
 
-static int loongarch_jump__parse(struct arch *arch, struct ins_operands *ops, struct map_symbol *ms)
+static int loongarch_jump__parse(struct arch *arch, struct ins_operands *ops, struct map_symbol *ms,
+		struct disasm_line *dl __maybe_unused)
 {
 	struct map *map = ms->map;
 	struct symbol *sym = ms->sym;
 	struct addr_map_symbol target = {
-		.ms = { .map = map, },
+		.ms = { .map = map__get(map), },
 	};
 	const char *c = strchr(ops->raw, '#');
 	u64 start, end;
 
-	ops->raw_comment = strchr(ops->raw, arch->objdump.comment_char);
-	ops->raw_func_start = strchr(ops->raw, '<');
+	ops->jump.raw_comment = strchr(ops->raw, arch->objdump.comment_char);
+	ops->jump.raw_func_start = strchr(ops->raw, '<');
 
-	if (ops->raw_func_start && c > ops->raw_func_start)
+	if (ops->jump.raw_func_start && c > ops->jump.raw_func_start)
 		c = NULL;
 
 	if (c++ != NULL)
@@ -88,11 +92,12 @@ static int loongarch_jump__parse(struct arch *arch, struct ins_operands *ops, st
 	} else {
 		ops->target.offset_avail = false;
 	}
-
+	addr_map_symbol__exit(&target);
 	return 0;
 }
 
 static struct ins_ops loongarch_jump_ops = {
+	.free	   = jump__delete,
 	.parse	   = loongarch_jump__parse,
 	.scnprintf = jump__scnprintf,
 };
@@ -129,6 +134,8 @@ int loongarch__annotate_init(struct arch *arch, char *cpuid __maybe_unused)
 		arch->associate_instruction_ops = loongarch__associate_ins_ops;
 		arch->initialized = true;
 		arch->objdump.comment_char = '#';
+		arch->e_machine = EM_LOONGARCH;
+		arch->e_flags = 0;
 	}
 
 	return 0;

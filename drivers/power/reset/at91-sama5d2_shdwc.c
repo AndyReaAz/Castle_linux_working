@@ -20,6 +20,7 @@
 
 #include <linux/clk.h>
 #include <linux/clk/at91_pmc.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -54,6 +55,12 @@
 #define AT91_SHDW_WKUPT_MASK	GENMASK(31, 16)
 #define AT91_SHDW_WKUPT(x)	((1 << (x)) << AT91_SHDW_WKUPT_SHIFT \
 						& AT91_SHDW_WKUPT_MASK)
+
+#define AT91_SHDW_IER	0x10
+#define AT91_SHDW_IDR	0x14
+#define AT91_SHDW_IMR	0x18
+#define AT91_SHDW_IR_MASK	GENMASK(5, 0)
+#define AT91_SHDW_ISR	0x1c
 
 #define SHDW_WK_PIN(reg, cfg)	((reg) & AT91_SHDW_WKUPIS((cfg)->wkup_pin_input))
 #define SHDW_RTCWK(reg, cfg)	(((reg) >> ((cfg)->sr_rtcwk_shift)) & 0x1)
@@ -92,6 +99,7 @@ struct reg_config {
 struct shdwc {
 	const struct reg_config *rcfg;
 	struct clk *sclk;
+	int irq;
 	void __iomem *shdwc_base;
 	void __iomem *mpddrc_base;
 	void __iomem *pmc_base;
@@ -107,7 +115,7 @@ static const unsigned long long sdwc_dbc_period[] = {
 	0, 3, 32, 512, 4096, 32768,
 };
 
-static void __init at91_wakeup_status(struct platform_device *pdev)
+static void at91_wakeup_status(struct platform_device *pdev)
 {
 	struct shdwc *shdw = platform_get_drvdata(pdev);
 	const struct reg_config *rcfg = shdw->rcfg;
@@ -129,7 +137,7 @@ static void __init at91_wakeup_status(struct platform_device *pdev)
 	else if (SHDW_RTTWK(reg, &rcfg->shdwc))
 		reason = "RTT";
 
-	pr_info("AT91: Wake-Up source: %s\n", reason);
+	dev_info(&pdev->dev, "Wake-Up source: %s\n", reason);
 }
 
 static void at91_poweroff(void)
@@ -167,6 +175,15 @@ static void at91_poweroff(void)
 		  "r" (at91_shdwc->pmc_base),
 		  "r" (at91_shdwc->rcfg->pmc.mckr)
 		: "r6");
+}
+
+static irqreturn_t at91_shdwc_irq(int irq, void *dev_id)
+{
+	struct shdwc *shdw = dev_id;
+
+	readl(shdw->shdwc_base + AT91_SHDW_ISR);
+
+	return IRQ_HANDLED;
 }
 
 static u32 at91_shdwc_debouncer_value(struct platform_device *pdev,
@@ -255,6 +272,13 @@ static void at91_shdwc_dt_configure(struct platform_device *pdev)
 
 	input = at91_shdwc_get_wakeup_input(pdev, np);
 	writel(input, shdw->shdwc_base + AT91_SHDW_WUIR);
+
+	/* The SAMA7D6 MPUs support IRQ handling */
+	if (shdw->irq) {
+		/* Enable IRQ */
+		writel(input & AT91_SHDW_IR_MASK, shdw->shdwc_base + AT91_SHDW_IER);
+	}
+
 }
 
 static const struct reg_config sama5d2_reg_config = {
@@ -327,15 +351,17 @@ static const struct of_device_id at91_pmc_ids[] = {
 	{ .compatible = "microchip,sam9x60-pmc" },
 	{ .compatible = "microchip,sama7g5-pmc" },
 	{ .compatible = "microchip,sam9x7-pmc" },
+	{ .compatible = "microchip,sama7d65-pmc" },
 	{ /* Sentinel. */ }
 };
 
-static int __init at91_shdwc_probe(struct platform_device *pdev)
+static int at91_shdwc_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *match;
 	struct device_node *np;
 	u32 ddr_type;
 	int ret;
+	int irq;
 
 	if (!pdev->dev.of_node)
 		return -ENODEV;
@@ -364,6 +390,21 @@ static int __init at91_shdwc_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "Could not enable slow clock\n");
 		return ret;
+	}
+	/* IRQ for the SAMA7D65 MPUs */
+	irq = platform_get_irq_optional(pdev, 0);
+	if (irq < 0) {
+		dev_warn(&pdev->dev, "Runtime IRQs not enabled, using legacy IRQs\n");
+	} else {
+		at91_shdwc->irq = irq;
+		irq = devm_request_irq(&pdev->dev, at91_shdwc->irq, at91_shdwc_irq, 0,
+				       dev_name(&pdev->dev), at91_shdwc);
+		if (irq < 0) {
+			dev_err(&pdev->dev, "Setting IRQs failed\n");
+			return irq;
+		}
+
+		dev_info(&pdev->dev, "Using runtime and legacy IRQs\n");
 	}
 
 	at91_wakeup_status(pdev);
@@ -422,7 +463,7 @@ clk_disable:
 	return ret;
 }
 
-static int __exit at91_shdwc_remove(struct platform_device *pdev)
+static void at91_shdwc_remove(struct platform_device *pdev)
 {
 	struct shdwc *shdw = platform_get_drvdata(pdev);
 
@@ -438,18 +479,17 @@ static int __exit at91_shdwc_remove(struct platform_device *pdev)
 	iounmap(shdw->pmc_base);
 
 	clk_disable_unprepare(shdw->sclk);
-
-	return 0;
 }
 
 static struct platform_driver at91_shdwc_driver = {
-	.remove = __exit_p(at91_shdwc_remove),
+	.probe = at91_shdwc_probe,
+	.remove = at91_shdwc_remove,
 	.driver = {
 		.name = "at91-shdwc",
 		.of_match_table = at91_shdwc_of_match,
 	},
 };
-module_platform_driver_probe(at91_shdwc_driver, at91_shdwc_probe);
+module_platform_driver(at91_shdwc_driver);
 
 MODULE_AUTHOR("Nicolas Ferre <nicolas.ferre@atmel.com>");
 MODULE_DESCRIPTION("Atmel shutdown controller driver");

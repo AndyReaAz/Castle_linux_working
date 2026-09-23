@@ -19,7 +19,7 @@
 #include <linux/i2c.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 /*
  * maximum accumulation time should be (17 * 60 * 1000) around 17 minutes@1024 sps
@@ -88,6 +88,7 @@
 #define PAC1934_VPOWER_3_ADDR			0x19
 #define PAC1934_VPOWER_4_ADDR			0x1A
 #define PAC1934_REFRESH_V_REG_ADDR		0x1F
+#define PAC1934_SLOW_REG_ADDR			0x20
 #define PAC1934_CTRL_STAT_REGS_ADDR		0x1C
 #define PAC1934_PID_REG_ADDR			0xFD
 #define PAC1934_MID_REG_ADDR			0xFE
@@ -225,11 +226,6 @@ enum pac1934_ch_idx {
 struct pac1934_features {
 	u8		phys_channels;
 	const char	*name;
-};
-
-struct samp_rate_mapping {
-	u16 samp_rate;
-	u8 shift2value;
 };
 
 static const unsigned int samp_rate_map_tbl[] = {
@@ -669,9 +665,9 @@ static int pac1934_reg_snapshot(struct pac1934_chip_info *info,
 			/* add the power_acc field */
 			curr_energy += inc;
 
-			clamp(curr_energy, PAC_193X_MIN_POWER_ACC, PAC_193X_MAX_POWER_ACC);
-
-			reg_data->energy_sec_acc[cnt] = curr_energy;
+			reg_data->energy_sec_acc[cnt] = clamp(curr_energy,
+							      PAC_193X_MIN_POWER_ACC,
+							      PAC_193X_MAX_POWER_ACC);
 		}
 
 		offset_reg_data_p += PAC1934_VPOWER_ACC_REG_LEN;
@@ -1086,10 +1082,10 @@ static int pac1934_chip_identify(struct pac1934_chip_info *info)
 
 /*
  * documentation related to the ACPI device definition
- * https://ww1.microchip.com/downloads/aemDocuments/documents/OTH/ApplicationNotes/ApplicationNotes/PAC1934-Integration-Notes-for-Microsoft-Windows-10-and-Windows-11-Driver-Support-DS00002534.pdf
+ * https://ww1.microchip.com/downloads/aemDocuments/documents/OTH/ApplicationNotes/ApplicationNotes/PAC193X-Integration-Notes-for-Microsoft-Windows-10-and-Windows-11-Driver-Support-DS00002534.pdf
  */
-static bool pac1934_acpi_parse_channel_config(struct i2c_client *client,
-					      struct pac1934_chip_info *info)
+static int pac1934_acpi_parse_channel_config(struct i2c_client *client,
+					     struct pac1934_chip_info *info)
 {
 	acpi_handle handle;
 	union acpi_object *rez;
@@ -1104,7 +1100,7 @@ static bool pac1934_acpi_parse_channel_config(struct i2c_client *client,
 
 	rez = acpi_evaluate_dsm(handle, &guid, 0, PAC1934_ACPI_GET_NAMES_AND_MOHMS_VALS, NULL);
 	if (!rez)
-		return false;
+		return -EINVAL;
 
 	for (i = 0; i < rez->package.count; i += 2) {
 		idx = i / 2;
@@ -1127,7 +1123,7 @@ static bool pac1934_acpi_parse_channel_config(struct i2c_client *client,
 		 * and assign the default sampling rate
 		 */
 		info->sample_rate_value = PAC1934_DEFAULT_CHIP_SAMP_SPEED_HZ;
-		return true;
+		return 0;
 	}
 
 	for (i = 0; i < rez->package.count; i++) {
@@ -1140,7 +1136,7 @@ static bool pac1934_acpi_parse_channel_config(struct i2c_client *client,
 
 	rez = acpi_evaluate_dsm(handle, &guid, 1, PAC1934_ACPI_GET_BIPOLAR_SETTINGS, NULL);
 	if (!rez)
-		return false;
+		return -EINVAL;
 
 	bi_dir_mask = rez->package.elements[0].integer.value;
 	info->bi_dir[0] = ((bi_dir_mask & (1 << 3)) | (bi_dir_mask & (1 << 7))) != 0;
@@ -1152,19 +1148,18 @@ static bool pac1934_acpi_parse_channel_config(struct i2c_client *client,
 
 	rez = acpi_evaluate_dsm(handle, &guid, 1, PAC1934_ACPI_GET_SAMP, NULL);
 	if (!rez)
-		return false;
+		return -EINVAL;
 
 	info->sample_rate_value = rez->package.elements[0].integer.value;
 
 	ACPI_FREE(rez);
 
-	return true;
+	return 0;
 }
 
-static bool pac1934_of_parse_channel_config(struct i2c_client *client,
-					    struct pac1934_chip_info *info)
+static int pac1934_fw_parse_channel_config(struct i2c_client *client,
+					   struct pac1934_chip_info *info)
 {
-	struct fwnode_handle *node, *fwnode;
 	struct device *dev = &client->dev;
 	unsigned int current_channel;
 	int idx, ret;
@@ -1172,46 +1167,38 @@ static bool pac1934_of_parse_channel_config(struct i2c_client *client,
 	info->sample_rate_value = 1024;
 	current_channel = 1;
 
-	fwnode = dev_fwnode(dev);
-	fwnode_for_each_available_child_node(fwnode, node) {
+	device_for_each_child_node_scoped(dev, node) {
 		ret = fwnode_property_read_u32(node, "reg", &idx);
-		if (ret) {
-			dev_err_probe(dev, ret,
-				      "reading invalid channel index\n");
-			goto err_fwnode;
-		}
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "reading invalid channel index\n");
+
 		/* adjust idx to match channel index (1 to 4) from the datasheet */
 		idx--;
 
 		if (current_channel >= (info->phys_channels + 1) ||
-		    idx >= info->phys_channels || idx < 0) {
-			dev_err_probe(dev, -EINVAL,
-				      "%s: invalid channel_index %d value\n",
-				      fwnode_get_name(node), idx);
-			goto err_fwnode;
-		}
+		    idx >= info->phys_channels || idx < 0)
+			return dev_err_probe(dev, -EINVAL,
+					     "%s: invalid channel_index %d value\n",
+					     fwnode_get_name(node), idx);
 
 		/* enable channel */
 		info->active_channels[idx] = true;
 
 		ret = fwnode_property_read_u32(node, "shunt-resistor-micro-ohms",
 					       &info->shunts[idx]);
-		if (ret) {
-			dev_err_probe(dev, ret,
-				      "%s: invalid shunt-resistor value: %d\n",
-				      fwnode_get_name(node), info->shunts[idx]);
-			goto err_fwnode;
-		}
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "%s: invalid shunt-resistor value: %d\n",
+					     fwnode_get_name(node), info->shunts[idx]);
 
 		if (fwnode_property_present(node, "label")) {
 			ret = fwnode_property_read_string(node, "label",
 							  (const char **)&info->labels[idx]);
-			if (ret) {
-				dev_err_probe(dev, ret,
-					      "%s: invalid rail-name value\n",
-					      fwnode_get_name(node));
-				goto err_fwnode;
-			}
+			if (ret)
+				return dev_err_probe(dev, ret,
+						     "%s: invalid rail-name value\n",
+						     fwnode_get_name(node));
 		}
 
 		info->bi_dir[idx] = fwnode_property_read_bool(node, "bipolar");
@@ -1219,12 +1206,7 @@ static bool pac1934_of_parse_channel_config(struct i2c_client *client,
 		current_channel++;
 	}
 
-	return true;
-
-err_fwnode:
-	fwnode_handle_put(node);
-
-	return false;
+	return 0;
 }
 
 static void pac1934_cancel_delayed_work(void *dwork)
@@ -1284,8 +1266,23 @@ static int pac1934_chip_configure(struct pac1934_chip_info *info)
 	/* no SLOW triggered REFRESH, clear POR */
 	regs[PAC1934_SLOW_REG_OFF] = 0;
 
-	ret =  i2c_smbus_write_block_data(client, PAC1934_CTRL_STAT_REGS_ADDR,
-					  ARRAY_SIZE(regs), (u8 *)regs);
+	/*
+	 * Write the three bytes sequentially, as the device does not support
+	 * block write.
+	 */
+	ret = i2c_smbus_write_byte_data(client, PAC1934_CTRL_STAT_REGS_ADDR,
+					regs[PAC1934_CHANNEL_DIS_REG_OFF]);
+	if (ret)
+		return ret;
+
+	ret = i2c_smbus_write_byte_data(client,
+					PAC1934_CTRL_STAT_REGS_ADDR + PAC1934_NEG_PWR_REG_OFF,
+					regs[PAC1934_NEG_PWR_REG_OFF]);
+	if (ret)
+		return ret;
+
+	ret = i2c_smbus_write_byte_data(client, PAC1934_SLOW_REG_ADDR,
+					regs[PAC1934_SLOW_REG_OFF]);
 	if (ret)
 		return ret;
 
@@ -1349,8 +1346,7 @@ static int pac1934_prep_iio_channels(struct pac1934_chip_info *info, struct iio_
 		channel_size += sizeof(pac1934_single_channel);
 		/* count how many enabled channels we have */
 		attribute_count += ARRAY_SIZE(pac1934_single_channel);
-		dev_info(dev, ":%s: Channel %d active\n",
-			 __func__, cnt + 1);
+		dev_dbg(dev, ":%s: Channel %d active\n", __func__, cnt + 1);
 	}
 
 	dyn_ch_struct = devm_kzalloc(dev, channel_size, GFP_KERNEL);
@@ -1475,13 +1471,6 @@ static int pac1934_prep_custom_attributes(struct pac1934_chip_info *info,
 	return 0;
 }
 
-static void pac1934_mutex_destroy(void *data)
-{
-	struct mutex *lock = data;
-
-	mutex_destroy(lock);
-}
-
 static const struct iio_info pac1934_info = {
 	.read_raw = pac1934_read_raw,
 	.write_raw = pac1934_write_raw,
@@ -1495,7 +1484,6 @@ static int pac1934_probe(struct i2c_client *client)
 	const struct pac1934_features *chip;
 	struct iio_dev *indio_dev;
 	int cnt, ret;
-	bool match = false;
 	struct device *dev = &client->dev;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*info));
@@ -1528,22 +1516,20 @@ static int pac1934_probe(struct i2c_client *client)
 		indio_dev->name = pac1934_chip_config[ret].name;
 	}
 
-	if (acpi_match_device(dev->driver->acpi_match_table, dev))
-		match = pac1934_acpi_parse_channel_config(client, info);
+	if (is_acpi_device_node(dev_fwnode(dev)))
+		ret = pac1934_acpi_parse_channel_config(client, info);
 	else
 		/*
 		 * This makes it possible to use also ACPI PRP0001 for
 		 * registering the device using device tree properties.
 		 */
-		match = pac1934_of_parse_channel_config(client, info);
+		ret = pac1934_fw_parse_channel_config(client, info);
 
-	if (!match)
-		return dev_err_probe(dev, -EINVAL,
+	if (ret)
+		return dev_err_probe(dev, ret,
 				     "parameter parsing returned an error\n");
 
-	mutex_init(&info->lock);
-	ret = devm_add_action_or_reset(dev, pac1934_mutex_destroy,
-				       &info->lock);
+	ret = devm_mutex_init(dev, &info->lock);
 	if (ret < 0)
 		return ret;
 
@@ -1592,7 +1578,7 @@ static const struct i2c_device_id pac1934_id[] = {
 	{ .name = "pac1932", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1932] },
 	{ .name = "pac1933", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1933] },
 	{ .name = "pac1934", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1934] },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, pac1934_id);
 
@@ -1613,7 +1599,7 @@ static const struct of_device_id pac1934_of_match[] = {
 		.compatible = "microchip,pac1934",
 		.data = &pac1934_chip_config[PAC1934]
 	},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, pac1934_of_match);
 
@@ -1623,7 +1609,7 @@ MODULE_DEVICE_TABLE(of, pac1934_of_match);
  */
 static const struct acpi_device_id pac1934_acpi_match[] = {
 	{ "MCHP1930", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1934] },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, pac1934_acpi_match);
 

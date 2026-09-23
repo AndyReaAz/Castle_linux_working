@@ -226,9 +226,6 @@ struct atmel_hlcdc_layer_cfg_layout {
 	int hxs_config;
 };
 
-struct atmel_hlcdc_plane_state;
-struct atmel_hlcdc_dc;
-
 /**
  * Atmel HLCDC DMA descriptor structure
  *
@@ -341,22 +338,48 @@ atmel_hlcdc_layer_to_plane(struct atmel_hlcdc_layer *layer)
 }
 
 /**
+ * struct atmel_hlcdc_dc - Atmel HLCDC Display Controller.
+ * @desc: HLCDC Display Controller description
+ * @dscrpool: DMA coherent pool used to allocate DMA descriptors
+ * @hlcdc: pointer to the atmel_hlcdc structure provided by the MFD device
+ * @crtc: CRTC provided by the display controller
+ * @layers: active HLCDC layers
+ * @suspend: used to store the HLCDC state when entering suspend
+ * @suspend.imr: used to read/write LCDC Interrupt Mask Register
+ * @suspend.state: Atomic commit structure
+ */
+struct atmel_hlcdc_dc {
+	const struct atmel_hlcdc_dc_desc *desc;
+	struct dma_pool *dscrpool;
+	struct atmel_hlcdc *hlcdc;
+	struct drm_crtc *crtc;
+	struct drm_device dev;
+	struct atmel_hlcdc_layer *layers[ATMEL_HLCDC_MAX_LAYERS];
+	struct {
+		u32 imr;
+		struct drm_atomic_state *state;
+	} suspend;
+};
+
+struct atmel_hlcdc_plane_state;
+
+/**
  * struct atmel_lcdc_dc_ops - describes atmel_lcdc ops group
- * to differentiate HLCDC and XLCDC IP code support.
+ * to differentiate HLCDC and XLCDC IP code support
  * @plane_setup_scaler: update the vertical and horizontal scaling factors
- * @update_lcdc_buffers: update the each LCDC layers DMA registers.
+ * @update_lcdc_buffers: update the each LCDC layers DMA registers
  * @lcdc_atomic_disable: disable LCDC interrupts and layers
  * @lcdc_update_general_settings: update each LCDC layers general
- * confiugration register.
- * @lcdc_atomic_update: enable the LCDC layers and interrupts.
+ * configuration register
+ * @lcdc_atomic_update: enable the LCDC layers and interrupts
  * @lcdc_csc_init: update the color space conversion co-efficient of
- * High-end overlay register.
- * @lcdc_irq_dbg: to raise alert incase of interrupt overrun in any LCDC layer.
+ * High-end overlay register
+ * @lcdc_irq_dbg: to raise alert incase of interrupt overrun in any LCDC layer
  */
 struct atmel_lcdc_dc_ops {
 	void (*plane_setup_scaler)(struct atmel_hlcdc_plane *plane,
 				   struct atmel_hlcdc_plane_state *state);
-	void (*update_lcdc_buffers)(struct atmel_hlcdc_plane *plane,
+	void (*lcdc_update_buffers)(struct atmel_hlcdc_plane *plane,
 				    struct atmel_hlcdc_plane_state *state,
 				    u32 sr, int i);
 	void (*lcdc_atomic_disable)(struct atmel_hlcdc_plane *plane,
@@ -370,6 +393,9 @@ struct atmel_lcdc_dc_ops {
 	void (*lcdc_irq_dbg)(struct atmel_hlcdc_plane *plane,
 			     const struct atmel_hlcdc_layer_desc *desc);
 };
+
+extern const struct atmel_lcdc_dc_ops atmel_hlcdc_ops;
+extern const struct atmel_lcdc_dc_ops atmel_xlcdc_ops;
 
 /**
  * Atmel HLCDC Display Controller description structure.
@@ -388,6 +414,7 @@ struct atmel_lcdc_dc_ops {
  *				each other.
  * @fixed_clksrc: true if clock source is fixed
  * @is_xlcdc: true if XLCDC IP is supported
+ * @srgb_cap: true if Serial RGB Mode is supported
  * @layers: a layer description table describing available layers
  * @nlayers: layer description table size
  * @ops: atmel lcdc dc ops
@@ -403,37 +430,11 @@ struct atmel_hlcdc_dc_desc {
 	bool conflicting_output_formats;
 	bool fixed_clksrc;
 	bool is_xlcdc;
+	bool srgb_cap;
 	const struct atmel_hlcdc_layer_desc *layers;
 	int nlayers;
 	const struct atmel_lcdc_dc_ops *ops;
 };
-
-/**
- * Atmel HLCDC Display Controller.
- *
- * @desc: HLCDC Display Controller description
- * @dscrpool: DMA coherent pool used to allocate DMA descriptors
- * @hlcdc: pointer to the atmel_hlcdc structure provided by the MFD device
- * @fbdev: framebuffer device attached to the Display Controller
- * @crtc: CRTC provided by the display controller
- * @planes: instantiated planes
- * @layers: active HLCDC layers
- * @suspend: used to store the HLCDC state when entering suspend
- */
-struct atmel_hlcdc_dc {
-	const struct atmel_hlcdc_dc_desc *desc;
-	struct dma_pool *dscrpool;
-	struct atmel_hlcdc *hlcdc;
-	struct drm_crtc *crtc;
-	struct atmel_hlcdc_layer *layers[ATMEL_HLCDC_MAX_LAYERS];
-	struct {
-		u32 imr;
-		struct drm_atomic_state *state;
-	} suspend;
-};
-
-extern const struct atmel_lcdc_dc_ops atmel_hlcdc_ops;
-extern const struct atmel_lcdc_dc_ops atmel_xlcdc_ops;
 
 extern struct atmel_hlcdc_formats atmel_hlcdc_plane_rgb_formats;
 extern struct atmel_hlcdc_formats atmel_hlcdc_plane_rgb_and_yuv_formats;
@@ -502,5 +503,6 @@ int atmel_hlcdc_crtc_create(struct drm_device *dev);
 
 int atmel_hlcdc_create_outputs(struct drm_device *dev);
 int atmel_hlcdc_encoder_get_bus_fmt(struct drm_encoder *encoder);
+bool atmel_hlcdc_encoder_get_srgb_mode(struct drm_encoder *encoder);
 
 #endif /* DRM_ATMEL_HLCDC_H */

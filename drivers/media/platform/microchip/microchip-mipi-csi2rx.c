@@ -129,13 +129,13 @@ static const u32 mipi_csi2dt_mbus_lut[][2] = {
  * @default_format: Default V4L2 format
  * @events: counter for events
  * @dev: Platform structure
- * @rsubdev: Remote subdev connected to sink pad
  * @clks: array of clocks
  * @iomem: Base address of subsystem
  * @max_num_lanes: Maximum number of lanes present
  * @datatype: Data type filter
  * @lock: mutex for accessing this structure
  * @pads: media pads
+ * @event_logs_enable : enable/disable event logs
  * @streaming: Flag for storing streaming state
  * @csi_fixed_out_raw8: If out put format is fixed to raw8
  *
@@ -146,7 +146,6 @@ struct mipi_csi2rx_state {
 	struct v4l2_mbus_framefmt format[2];
 	struct v4l2_mbus_framefmt default_format[2];
 	struct device *dev;
-	struct v4l2_subdev *rsubdev;
 	struct clk_bulk_data *clks;
 	void __iomem *iomem;
 	u32 max_num_lanes;
@@ -155,6 +154,7 @@ struct mipi_csi2rx_state {
 	/* used to protect access to this struct */
 	struct mutex lock;
 	struct media_pad pads[MIPI_CSI_MEDIA_PADS];
+	bool event_logs_enable;
 	bool streaming;
 	bool csi_fixed_out_raw8;
 };
@@ -310,17 +310,6 @@ static int mipi_csi2rx_log_status(struct v4l2_subdev *sd)
 	return 0;
 }
 
-static struct v4l2_subdev *mipi_csi2rx_get_remote_subdev(struct media_pad *local)
-{
-	struct media_pad *remote;
-
-	remote = media_pad_remote_pad_first(local);
-	if (!remote || !is_media_entity_v4l2_subdev(remote->entity))
-		return NULL;
-
-	return media_entity_to_v4l2_subdev(remote->entity);
-}
-
 static int mipi_csi2rx_start_stream(struct mipi_csi2rx_state *state)
 {
 	int ret = 0;
@@ -331,34 +320,21 @@ static int mipi_csi2rx_start_stream(struct mipi_csi2rx_state *state)
 		return ret;
 	}
 
-	mipi_csi2rx_set(state, MIPI_CSI_GLOBAL_INTERRUPT,
-			MIPI_CSI_GLOBAL_IRQ_EN);
+	if (state->event_logs_enable)
+		mipi_csi2rx_set(state, MIPI_CSI_GLOBAL_INTERRUPT,
+				MIPI_CSI_GLOBAL_IRQ_EN);
+
 	mipi_csi2rx_set(state, MIPI_CSI_INTERRUPT_EN,
 			MIPI_CSI_INTERRUPT_EN_MASK);
 	mipi_csi2rx_set(state, MIPI_CSI_CTRL, MIPI_CSI_CTRL_START);
 
 	state->streaming = true;
 
-	state->rsubdev =
-		mipi_csi2rx_get_remote_subdev(&state->pads[MVC_PAD_SINK]);
-
-	ret = v4l2_subdev_call(state->rsubdev, video, s_stream, 1);
-	if (ret) {
-		mipi_csi2rx_clr(state, MIPI_CSI_GLOBAL_INTERRUPT,
-				MIPI_CSI_GLOBAL_IRQ_EN);
-		mipi_csi2rx_clr(state, MIPI_CSI_INTERRUPT_EN,
-				MIPI_CSI_INTERRUPT_EN_MASK);
-		mipi_csi2rx_clr(state, MIPI_CSI_CTRL, MIPI_CSI_CTRL_START);
-		state->streaming = false;
-	}
-
 	return ret;
 }
 
 static void mipi_csi2rx_stop_stream(struct mipi_csi2rx_state *state)
 {
-	v4l2_subdev_call(state->rsubdev, video, s_stream, 0);
-
 	mipi_csi2rx_clr(state, MIPI_CSI_GLOBAL_INTERRUPT, MIPI_CSI_GLOBAL_IRQ_EN);
 	mipi_csi2rx_clr(state, MIPI_CSI_INTERRUPT_EN, MIPI_CSI_INTERRUPT_EN_MASK);
 	mipi_csi2rx_clr(state, MIPI_CSI_CTRL, MIPI_CSI_CTRL_START);
@@ -421,30 +397,12 @@ __mipi_csi2rx_get_pad_format(struct mipi_csi2rx_state *csi2rx,
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_get_try_format(&csi2rx->subdev,
-						  sd_state, pad);
+		return v4l2_subdev_state_get_format(sd_state, pad);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
-			return &csi2rx->format[pad];
+		return &csi2rx->format[pad];
 	default:
 		return NULL;
 	}
-}
-
-static int mipi_csi2rx_init_cfg(struct v4l2_subdev *sd,
-				struct v4l2_subdev_state *sd_state)
-{
-	struct mipi_csi2rx_state *csi2rx = to_csi2rxstate(sd);
-	struct v4l2_mbus_framefmt *format;
-	unsigned int i;
-
-	mutex_lock(&csi2rx->lock);
-	for (i = 0; i < MIPI_CSI_MEDIA_PADS; i++) {
-		format = v4l2_subdev_get_try_format(sd, sd_state, i);
-		*format = csi2rx->default_format[i];
-	}
-	mutex_unlock(&csi2rx->lock);
-
-	return 0;
 }
 
 static int mipi_csi2rx_get_format(struct v4l2_subdev *sd,
@@ -556,9 +514,33 @@ static int mipi_csi2rx_enum_mbus_code(struct v4l2_subdev *sd,
 	return ret;
 }
 
+static int mipi_csi2rx_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
+{
+	struct mipi_csi2rx_state *state = to_csi2rxstate(sd);
+	struct v4l2_mbus_framefmt *format;
+
+	format = v4l2_subdev_state_get_format(fh->state, MVC_PAD_SINK);
+	*format = state->default_format[MVC_PAD_SINK];
+
+	format = v4l2_subdev_state_get_format(fh->state, MVC_PAD_SOURCE);
+	*format = state->default_format[MVC_PAD_SOURCE];
+
+	return 0;
+}
+
+static int mipi_csi2rx_close(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
+{
+	return 0;
+}
+
 /* -----------------------------------------------------------------------------
  * Media Operations
  */
+
+static const struct v4l2_subdev_internal_ops mipi_csi2rx_internal_ops = {
+	.open = mipi_csi2rx_open,
+	.close = mipi_csi2rx_close,
+};
 
 static const struct media_entity_operations mipi_csi2rx_media_ops = {
 	.link_validate = v4l2_subdev_link_validate
@@ -573,7 +555,6 @@ static const struct v4l2_subdev_video_ops mipi_csi2rx_video_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops mipi_csi2rx_pad_ops = {
-	.init_cfg = mipi_csi2rx_init_cfg,
 	.get_fmt = mipi_csi2rx_get_format,
 	.set_fmt = mipi_csi2rx_set_format,
 	.enum_mbus_code = mipi_csi2rx_enum_mbus_code,
@@ -648,6 +629,42 @@ static int mipi_csi2rx_parse_of(struct mipi_csi2rx_state *csi2rx)
 
 	return 0;
 }
+
+static ssize_t mipi_csi2rx_event_logs_enable_store(struct device *dev,
+						   struct device_attribute *attr,
+						   const char *buff, size_t count)
+{
+	struct mipi_csi2rx_state *csi2rx = dev_get_drvdata(dev);
+	int ret;
+
+	ret = kstrtobool(buff, &csi2rx->event_logs_enable);
+	if (ret)
+		return ret;
+
+	mutex_lock(&csi2rx->lock);
+
+	if (csi2rx->event_logs_enable)
+		mipi_csi2rx_set(csi2rx, MIPI_CSI_GLOBAL_INTERRUPT,
+				MIPI_CSI_GLOBAL_IRQ_EN);
+	else
+		mipi_csi2rx_clr(csi2rx, MIPI_CSI_GLOBAL_INTERRUPT,
+				MIPI_CSI_GLOBAL_IRQ_EN);
+
+	mutex_unlock(&csi2rx->lock);
+
+	return count;
+}
+
+static ssize_t mipi_csi2rx_event_logs_enable_show(struct device *dev,
+						  struct device_attribute *attr,
+						  char *buf)
+{
+	struct mipi_csi2rx_state *csi2rx = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d\n", csi2rx->event_logs_enable);
+}
+
+static DEVICE_ATTR_RW(mipi_csi2rx_event_logs_enable);
 
 static int mipi_csi2rx_probe(struct platform_device *pdev)
 {
@@ -725,6 +742,7 @@ static int mipi_csi2rx_probe(struct platform_device *pdev)
 	strscpy(subdev->name, dev_name(dev), sizeof(subdev->name));
 	subdev->flags |= V4L2_SUBDEV_FL_HAS_EVENTS | V4L2_SUBDEV_FL_HAS_DEVNODE;
 	subdev->entity.ops = &mipi_csi2rx_media_ops;
+	subdev->internal_ops = &mipi_csi2rx_internal_ops;
 	v4l2_set_subdevdata(subdev, csi2rx);
 
 	ret = media_entity_pads_init(&subdev->entity, MIPI_CSI_MEDIA_PADS,
@@ -733,6 +751,13 @@ static int mipi_csi2rx_probe(struct platform_device *pdev)
 		goto error;
 
 	platform_set_drvdata(pdev, csi2rx);
+
+	csi2rx->event_logs_enable = 0;
+	ret = device_create_file(dev, &dev_attr_mipi_csi2rx_event_logs_enable);
+	if (ret < 0) {
+		dev_err(dev, "failed to create device attr file\n");
+		goto error;
+	}
 
 	ret = v4l2_async_register_subdev(subdev);
 	if (ret < 0) {
@@ -750,7 +775,7 @@ err_clk_put:
 	return ret;
 }
 
-static int mipi_csi2rx_remove(struct platform_device *pdev)
+static void mipi_csi2rx_remove(struct platform_device *pdev)
 {
 	struct mipi_csi2rx_state *csi2rx = platform_get_drvdata(pdev);
 	struct v4l2_subdev *subdev = &csi2rx->subdev;
@@ -761,8 +786,6 @@ static int mipi_csi2rx_remove(struct platform_device *pdev)
 	mutex_destroy(&csi2rx->lock);
 	clk_bulk_disable_unprepare(num_clks, csi2rx->clks);
 	clk_bulk_put(num_clks, csi2rx->clks);
-
-	return 0;
 }
 
 static const struct of_device_id mipi_csi2rx_of_id_table[] = {
