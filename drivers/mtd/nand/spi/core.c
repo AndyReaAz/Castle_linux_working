@@ -556,8 +556,36 @@ static int spinand_wait(struct spinand_device *spinand,
 {
 	struct spi_mem_op op = SPINAND_GET_FEATURE_OP(REG_STATUS,
 						      spinand->scratchbuf);
+	ktime_t timeout;
 	u8 status;
 	int ret;
+
+	/*
+	 * Very short SPI-NAND read waits are latency-sensitive.  The generic
+	 * spi_mem_poll_status() fallback uses usleep_range() for a non-zero
+	 * poll delay, which is far more expensive than the NAND tRD on this
+	 * platform.  Keep the specified microsecond cadence with udelay() for
+	 * sub-10us polling intervals; writes and erases retain the normal
+	 * sleepable polling path.
+	 */
+	if (poll_delay_us && poll_delay_us < 10) {
+		if (initial_delay_us)
+			udelay(initial_delay_us);
+
+		timeout = ktime_add_ms(ktime_get(), SPINAND_WAITRDY_TIMEOUT_MS);
+		do {
+			ret = spinand_read_status(spinand, &status);
+			if (ret)
+				return ret;
+
+			if (!(status & STATUS_BUSY))
+				goto out;
+
+			udelay(poll_delay_us);
+		} while (ktime_before(ktime_get(), timeout));
+
+		return -ETIMEDOUT;
+	}
 
 	ret = spi_mem_poll_status(spinand->spimem, &op, STATUS_BUSY, 0,
 				  initial_delay_us,
