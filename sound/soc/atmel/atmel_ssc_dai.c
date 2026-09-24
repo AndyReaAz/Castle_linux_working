@@ -1126,6 +1126,7 @@ timeout:
 
 EXPORT_SYMBOL_GPL(atmel_ssc_send_word_response);
 
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
 int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
 {
 	return atmel_ssc_send_word_response(dai, word, NULL);
