@@ -12,7 +12,6 @@
 /*
  * Exported from atmel_ssc_dai.c
  */
-extern int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
 extern int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
 					u32 *response);
 extern void atmel_ssc_get_going_config(struct snd_soc_dai *dai);
@@ -140,6 +139,8 @@ static void ads131a_read_reg_diag(struct device *dev,
 {
 	u32 response = 0;
 	u32 cmd = 0x200000 | ((addr & 0x1f) << 16);
+	u8 value;
+	u8 response_addr;
 	int ret;
 
 	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
@@ -150,18 +151,24 @@ static void ads131a_read_reg_diag(struct device *dev,
 		return;
 	}
 
+	response_addr = (response >> 16) & 0xff;
+	value = (response >> 8) & 0xff;
+
 	/*
-	 * Deliberately log the raw 24-bit response. Do not reject startup if
-	 * its encoding is not what we expect; this readback is here to observe
-	 * the real device behaviour on NextGen hardware.
+	 * Diagnostic only. Report both the decoded byte and the raw response,
+	 * but never reject startup if the returned command/address field is
+	 * unexpected.
 	 */
 	dev_info(dev,
-		 "ADS131A diagnostic RREG %s (0x%02x) response=0x%06x\n",
-		 name, addr, response);
+		 "ADS131A RREG %s=0x%02x raw=0x%06x%s\n",
+		 name, value, response,
+		 response_addr == (0x20 | (addr & 0x1f)) ? "" :
+		 " (unexpected response address)");
 }
 
 static int ads131a_configure(struct snd_soc_dai *cpu_dai,
-			     struct snd_pcm_hw_params *params)
+			     struct snd_pcm_hw_params *params,
+			     struct ads131a_priv *priv)
 {
 	int ret;
 
@@ -274,7 +281,7 @@ static int ads131a_hw_params(struct snd_pcm_substream *substream,
 	/*
          * Configure this ADS131A instance before capture starts.
          */
-	ret = ads131a_configure(cpu_dai, params);
+	ret = ads131a_configure(cpu_dai, params, priv);
 	if (!ret)
 		priv->initialised = true;
 
