@@ -1065,8 +1065,10 @@ CMR 00000000 RCMR 00000402 RFMR 01000297 TCMR 00000161 TFMR 01000097  SR 0000000
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_get_going_config);
 
-int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
-int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
+int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
+				 u32 *response);
+int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
+				 u32 *response)
 {
 	struct platform_device *pdev = to_platform_device(dai->dev);
 	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
@@ -1112,13 +1114,22 @@ int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
 
 	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY)))
 		cpu_relax();
-	// printk("%s TX %06X %06X RX %06X %06X\n", __FUNCTION__, tx[0], tx[1], rx[0], rx[1] );
+
+	if (response)
+		*response = rx[1] & 0x00ffffff;
+
 	return 0;
 timeout:
 	printk("%s timeout i=%d\n", __FUNCTION__, i);
 	return -1;
 }
 
+EXPORT_SYMBOL_GPL(atmel_ssc_send_word_response);
+
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
+{
+	return atmel_ssc_send_word_response(dai, word, NULL);
+}
 EXPORT_SYMBOL_GPL(atmel_ssc_send_word);
 
 /* Module information */
