@@ -110,6 +110,29 @@ static int ads131a_write_reg(struct snd_soc_dai *cpu_dai, u32 addr, u32 value)
 						 ((value & 0xff) << 8));
 }
 
+static int ads131a_write_reg_diag(struct snd_soc_dai *cpu_dai, u32 addr,
+				  u32 value, const char *name)
+{
+	u32 response = 0;
+	u32 cmd = 0x400000 | ((addr & 0x1f) << 16) |
+		  ((value & 0xff) << 8);
+	int ret;
+
+	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
+	if (ret) {
+		dev_err(cpu_dai->dev,
+			"failed to write ADS131A %s (0x%02x) value 0x%02x (%d)\n",
+			name, addr, value, ret);
+		return ret;
+	}
+
+	dev_info(cpu_dai->dev,
+		 "ADS131A diagnostic WREG %s (0x%02x)=0x%02x response=0x%06x\n",
+		 name, addr, value, response);
+
+	return 0;
+}
+
 static void ads131a_read_reg_diag(struct snd_soc_dai *cpu_dai, u8 addr,
 				  const char *name)
 {
@@ -209,8 +232,8 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 	 * CLK1 /2 makes the ADC drive SCLK at 12.288 MHz, after which the current
 	 * command path cannot reliably perform further configuration writes.
 	 */
-	ret = ads131a_write_reg(cpu_dai, ADS131A_REG_CLK1,
-				ADS131A_CLK1_CLKIN_DIV2);
+	ret = ads131a_write_reg_diag(cpu_dai, ADS131A_REG_CLK1,
+				     ADS131A_CLK1_CLKIN_DIV2, "CLK1");
 	if (ret)
 		return ret;
 
