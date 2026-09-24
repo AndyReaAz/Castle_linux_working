@@ -13,6 +13,8 @@
  * Exported from atmel_ssc_dai.c
  */
 extern int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
+extern int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
+					u32 *response);
 extern void atmel_ssc_get_going_config(struct snd_soc_dai *dai);
 extern void atmel_ssc_config_done(struct snd_soc_dai *dai);
 /*
@@ -28,6 +30,7 @@ extern void atmel_ssc_config_done(struct snd_soc_dai *dai);
 #define ADS131A_CMD_START 0x00008800
 #define ADS131A_CMD_STOP 0x0000AA00
 
+#define ADS131A_REG_ID_MSB    0x00
 #define ADS131A_REG_A_SYS_CFG 0x0b
 #define ADS131A_REG_CLK1      0x0d
 #define ADS131A_REG_CLK2      0x0e
@@ -80,21 +83,56 @@ static int ads131a_get_ssc_id(struct device *dev)
 
 static int ads131a_send_cmd(struct snd_soc_dai *cpu_dai, u32 cmd)
 {
+	u32 response = 0;
 	int ret;
 
-	dev_dbg(cpu_dai->dev, "ADS131A CMD 0x%08x\n", cmd);
-
-	ret = atmel_ssc_send_word(cpu_dai, cmd);
-	if (ret)
+	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
+	if (ret) {
 		dev_err(cpu_dai->dev,
 			"failed to send ADS131A cmd 0x%08x (%d)\n", cmd, ret);
+		return ret;
+	}
 
-	return ret;
+	/*
+	 * Keep command-response visibility without making startup depend on
+	 * response decoding. The deployed command transport is intentionally
+	 * unchanged; this is diagnostic only.
+	 */
+	dev_dbg(cpu_dai->dev, "ADS131A CMD 0x%08x response 0x%06x\n",
+		cmd, response);
+
+	return 0;
 }
-static int ads131a_write_reg(struct snd_soc_dai *cpu_dai, u32 Addr, u32 Value)
+
+static int ads131a_write_reg(struct snd_soc_dai *cpu_dai, u32 addr, u32 value)
 {
-	return ads131a_send_cmd(cpu_dai, 0x400000 | ((Addr & 0x1f) << 16) |
-						 ((Value & 0xff) << 8));
+	return ads131a_send_cmd(cpu_dai, 0x400000 | ((addr & 0x1f) << 16) |
+						 ((value & 0xff) << 8));
+}
+
+static void ads131a_read_reg_diag(struct snd_soc_dai *cpu_dai, u8 addr,
+				  const char *name)
+{
+	u32 response = 0;
+	u32 cmd = 0x200000 | ((addr & 0x1f) << 16);
+	int ret;
+
+	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
+	if (ret) {
+		dev_warn(cpu_dai->dev,
+			 "ADS131A diagnostic RREG %s (0x%02x) failed: %d\n",
+			 name, addr, ret);
+		return;
+	}
+
+	/*
+	 * Deliberately log the raw 24-bit response. Do not reject startup if
+	 * its encoding is not what we expect; this readback is here to observe
+	 * the real device behaviour on NextGen hardware.
+	 */
+	dev_info(cpu_dai->dev,
+		 "ADS131A diagnostic RREG %s (0x%02x) response=0x%06x\n",
+		 name, addr, response);
 }
 
 static int ads131a_configure(struct snd_soc_dai *cpu_dai,
@@ -110,6 +148,9 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 	ret = ads131a_send_cmd(cpu_dai, ADS131A_CMD_UNLOCK);
 	if (ret)
 		return ret;
+
+	/* Diagnostic only: identify what this particular board actually fitted. */
+	ads131a_read_reg_diag(cpu_dai, ADS131A_REG_ID_MSB, "ID_MSB");
 
 	ret = ads131a_write_reg(cpu_dai, ADS131A_REG_A_SYS_CFG, 0x78);
 	if (ret)
@@ -146,6 +187,9 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 	}
 	if (ret)
 		return ret;
+
+	/* Still at the one-word configuration frame here, so RREG is safe. */
+	ads131a_read_reg_diag(cpu_dai, ADS131A_REG_CLK2, "CLK2");
 
 	if (params_channels(params) == 2 || params_channels(params) == 3)
 		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_ADC_ENA, 0x03);
