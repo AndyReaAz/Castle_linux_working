@@ -716,10 +716,8 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 	ssc_writel(ssc_p->ssc->regs, CMR, cmr_div);
 
 	/*
-	 * NextGen ADS131A framing. Preserve the clock, edge and 24-bit format
-	 * proven on the existing hardware, but derive the receive frame length
-	 * from the ALSA transport width. The ADS131A stream includes its leading
-	 * status word, so sound requests 3 words and vibration requests 5.
+	 * NextGen ADS131A framing.  Keep the 6.18 DAMR/direct-path state,
+	 * but retain the register programming proven on the existing hardware.
 	 */
 	rcmr = 0x0402;
 	rfmr = 0x01000097 | SSC_BF(RFMR_DATNB, channels - 1);
@@ -1067,60 +1065,11 @@ CMR 00000000 RCMR 00000402 RFMR 01000297 TCMR 00000161 TFMR 01000097  SR 0000000
 }
 EXPORT_SYMBOL_GPL(atmel_ssc_get_going_config);
 
-static int atmel_ssc_xfer_device_word(struct snd_soc_dai *dai,
-				      struct atmel_ssc_info *ssc_p,
-				      u32 tx, u32 *rx)
-{
-	int timeout = 100000;
-
-	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
-		if (!--timeout) {
-			dev_err(dai->dev, "%s TXRDY timeout\n", __func__);
-			return -ETIMEDOUT;
-		}
-		cpu_relax();
-	}
-
-	ssc_writel(ssc_p->ssc->regs, THR, tx);
-
-	timeout = 100000;
-	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
-		if (!--timeout) {
-			dev_err(dai->dev, "%s RXRDY timeout\n", __func__);
-			return -ETIMEDOUT;
-		}
-		cpu_relax();
-	}
-
-	if (rx)
-		*rx = ssc_readl(ssc_p->ssc->regs, RHR) & 0x00ffffff;
-	else
-		(void)ssc_readl(ssc_p->ssc->regs, RHR);
-
-	return 0;
-}
-
-/*
- * Transfer one complete ADS131A command frame followed by one complete
- * response frame.  In dynamic-frame mode the frame length changes when
- * ADC_ENA changes, so command_words and response_words are deliberately
- * separate.
- */
-int atmel_ssc_transfer_frame(struct snd_soc_dai *dai, u32 command,
-			     unsigned int command_words,
-			     unsigned int response_words,
-			     u32 *response_status)
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word);
+int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
 {
 	struct platform_device *pdev = to_platform_device(dai->dev);
 	struct atmel_ssc_info *ssc_p = &ssc_info[pdev->id];
-	u32 rx;
-	unsigned int i;
-	int timeout;
-	int ret;
-
-	if (!command_words || command_words > 6 ||
-	    !response_words || response_words > 6)
-		return -EINVAL;
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_TXDIS) | SSC_BIT(CR_RXDIS));
 
@@ -1129,40 +1078,47 @@ int atmel_ssc_transfer_frame(struct snd_soc_dai *dai, u32 command,
 		(void)ssc_readl(ssc_p->ssc->regs, RHR);
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN));
+	u32 rx[10];
+	u32 tx[10];
+	int timeout, i = 0;
 
-	for (i = 0; i < command_words; i++) {
-		ret = atmel_ssc_xfer_device_word(dai, ssc_p,
-						i ? 0 : command, NULL);
-		if (ret)
-			return ret;
-	}
+	for (i = 0; i < 2; i++) {
+		rx[i] = 0;
+		u32 t = (i == 0) ? word  : 0;
 
-	for (i = 0; i < response_words; i++) {
-		ret = atmel_ssc_xfer_device_word(dai, ssc_p, 0, &rx);
-		if (ret)
-			return ret;
-
-		if (!i && response_status)
-			*response_status = rx;
-	}
-
-	timeout = 100000;
-	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY))) {
-		if (!--timeout) {
-			dev_err(dai->dev, "%s TXEMPTY timeout\n", __func__);
-			return -ETIMEDOUT;
+		timeout = 100000;
+		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXRDY))) {
+			if (!--timeout) {
+				printk("%s txrdy timeout \n", __FUNCTION__);
+				goto timeout;
+			}
+			cpu_relax();
 		}
-		cpu_relax();
+
+		ssc_writel(ssc_p->ssc->regs, THR, t);
+		tx[i] = t;
+
+		timeout = 100000;
+		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
+			if (!--timeout) {
+				printk("%s rxrdy timeout \n", __FUNCTION__);
+				goto timeout;
+			}
+			cpu_relax();
+		}
+
+		rx[i] = ssc_readl(ssc_p->ssc->regs, RHR);
 	}
 
+	while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_TXEMPTY)))
+		cpu_relax();
+	// printk("%s TX %06X %06X RX %06X %06X\n", __FUNCTION__, tx[0], tx[1], rx[0], rx[1] );
 	return 0;
+timeout:
+	printk("%s timeout i=%d\n", __FUNCTION__, i);
+	return -1;
 }
-EXPORT_SYMBOL_GPL(atmel_ssc_transfer_frame);
 
-int atmel_ssc_send_word(struct snd_soc_dai *dai, u32 word)
-{
-	return atmel_ssc_transfer_frame(dai, word, 1, 1, NULL);
-}
 EXPORT_SYMBOL_GPL(atmel_ssc_send_word);
 
 /* Module information */
