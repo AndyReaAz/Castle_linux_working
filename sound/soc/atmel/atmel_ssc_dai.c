@@ -1080,8 +1080,7 @@ int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
 		(void)ssc_readl(ssc_p->ssc->regs, RHR);
 
 	ssc_writel(ssc_p->ssc->regs, CR, SSC_BIT(CR_RXEN) | SSC_BIT(CR_TXEN));
-	u32 rx[10];
-	u32 tx[10];
+	u32 rx[2];
 	int timeout, i = 0;
 
 	for (i = 0; i < 2; i++) {
@@ -1098,7 +1097,6 @@ int atmel_ssc_send_word_response(struct snd_soc_dai *dai, u32 word,
 		}
 
 		ssc_writel(ssc_p->ssc->regs, THR, t);
-		tx[i] = t;
 
 		timeout = 100000;
 		while (!(ssc_readl(ssc_p->ssc->regs, SR) & SSC_BIT(SR_RXRDY))) {
