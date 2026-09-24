@@ -716,11 +716,13 @@ static int atmel_ssc_hw_params(struct snd_pcm_substream *substream,
 	ssc_writel(ssc_p->ssc->regs, CMR, cmr_div);
 
 	/*
-	 * NextGen ADS131A framing.  Keep the 6.18 DAMR/direct-path state,
-	 * but retain the register programming proven on the existing hardware.
+	 * NextGen ADS131A framing. Preserve the clock, edge and 24-bit format
+	 * proven on the existing hardware, but derive the receive frame length
+	 * from the ALSA transport width. The ADS131A stream includes its leading
+	 * status word, so sound requests 3 words and vibration requests 5.
 	 */
 	rcmr = 0x0402;
-	rfmr = 0x01000297;
+	rfmr = 0x01000097 | SSC_BF(RFMR_DATNB, channels - 1);
 	tcmr = 0x0141;
 	tfmr = 0x01000097;
 
