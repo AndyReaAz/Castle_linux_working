@@ -110,7 +110,8 @@ static int ads131a_write_reg(struct snd_soc_dai *cpu_dai, u32 addr, u32 value)
 						 ((value & 0xff) << 8));
 }
 
-static int ads131a_write_reg_diag(struct snd_soc_dai *cpu_dai, u32 addr,
+static int ads131a_write_reg_diag(struct device *dev,
+				  struct snd_soc_dai *cpu_dai, u32 addr,
 				  u32 value, const char *name)
 {
 	u32 response = 0;
@@ -120,20 +121,21 @@ static int ads131a_write_reg_diag(struct snd_soc_dai *cpu_dai, u32 addr,
 
 	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
 	if (ret) {
-		dev_err(cpu_dai->dev,
+		dev_err(dev,
 			"failed to write ADS131A %s (0x%02x) value 0x%02x (%d)\n",
 			name, addr, value, ret);
 		return ret;
 	}
 
-	dev_info(cpu_dai->dev,
+	dev_info(dev,
 		 "ADS131A diagnostic WREG %s (0x%02x)=0x%02x response=0x%06x\n",
 		 name, addr, value, response);
 
 	return 0;
 }
 
-static void ads131a_read_reg_diag(struct snd_soc_dai *cpu_dai, u8 addr,
+static void ads131a_read_reg_diag(struct device *dev,
+				  struct snd_soc_dai *cpu_dai, u8 addr,
 				  const char *name)
 {
 	u32 response = 0;
@@ -142,7 +144,7 @@ static void ads131a_read_reg_diag(struct snd_soc_dai *cpu_dai, u8 addr,
 
 	ret = atmel_ssc_send_word_response(cpu_dai, cmd, &response);
 	if (ret) {
-		dev_warn(cpu_dai->dev,
+		dev_warn(dev,
 			 "ADS131A diagnostic RREG %s (0x%02x) failed: %d\n",
 			 name, addr, ret);
 		return;
@@ -153,7 +155,7 @@ static void ads131a_read_reg_diag(struct snd_soc_dai *cpu_dai, u8 addr,
 	 * its encoding is not what we expect; this readback is here to observe
 	 * the real device behaviour on NextGen hardware.
 	 */
-	dev_info(cpu_dai->dev,
+	dev_info(dev,
 		 "ADS131A diagnostic RREG %s (0x%02x) response=0x%06x\n",
 		 name, addr, response);
 }
@@ -173,7 +175,7 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 		return ret;
 
 	/* Diagnostic only: identify what this particular board actually fitted. */
-	ads131a_read_reg_diag(cpu_dai, ADS131A_REG_ID_MSB, "ID_MSB");
+	ads131a_read_reg_diag(priv->dev, cpu_dai, ADS131A_REG_ID_MSB, "ID_MSB");
 
 	ret = ads131a_write_reg(cpu_dai, ADS131A_REG_A_SYS_CFG, 0x78);
 	if (ret)
@@ -212,7 +214,7 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 		return ret;
 
 	/* Still at the one-word configuration frame here, so RREG is safe. */
-	ads131a_read_reg_diag(cpu_dai, ADS131A_REG_CLK2, "CLK2");
+	ads131a_read_reg_diag(priv->dev, cpu_dai, ADS131A_REG_CLK2, "CLK2");
 
 	if (params_channels(params) == 2 || params_channels(params) == 3)
 		ret = ads131a_write_reg(cpu_dai, ADS131A_REG_ADC_ENA, 0x03);
@@ -232,7 +234,7 @@ static int ads131a_configure(struct snd_soc_dai *cpu_dai,
 	 * CLK1 /2 makes the ADC drive SCLK at 12.288 MHz, after which the current
 	 * command path cannot reliably perform further configuration writes.
 	 */
-	ret = ads131a_write_reg_diag(cpu_dai, ADS131A_REG_CLK1,
+	ret = ads131a_write_reg_diag(priv->dev, cpu_dai, ADS131A_REG_CLK1,
 				     ADS131A_CLK1_CLKIN_DIV2, "CLK1");
 	if (ret)
 		return ret;
