@@ -81,7 +81,7 @@ show_config()
     echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -106,12 +106,14 @@ configure_fast()
     # warning while preserving the same setting.
     "$cfg" --file "$config" -d BASE_SMALL
 
-    # Keep the flash controller/NAND path resident in the kernel.  MTD can
-    # exist from boot while any higher-level UBI attach/mount remains a
-    # separate userspace policy decision.  This also avoids module load/unload
-    # lifecycle differences while the 6.18 flash path is being stabilised.
+    # Keep the flash controller/NAND path resident in the kernel.  The first
+    # NAND-root profile also needs UBI and UBIFS built in: modules cannot be
+    # loaded before the root filesystem itself is available.
     "$cfg" --file "$config" -e SPI_ATMEL_QUADSPI
     "$cfg" --file "$config" -e MTD_SPI_NAND
+    "$cfg" --file "$config" -e MTD_UBI
+    "$cfg" --file "$config" -e UBIFS_FS
+    "$cfg" --file "$config" -e UBIFS_FS_LZO
 
     # The 6.6 tree used CONFIG_WILC_SPI. Linux 6.18 uses the upstream-style
     # WILC1000 bus symbols. Keep SPI as a module because userspace deliberately
@@ -141,9 +143,10 @@ configure_fast()
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
     done
 
-    # QSPI and SPI-NAND are intentionally built in.  They are needed for the
-    # eventual on-board MTD path and should have one stable lifetime from boot.
-    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND
+    # QSPI, SPI-NAND, UBI and UBIFS are intentionally built in.  This permits
+    # Linux to mount root=ubi0:rootfs without an initramfs while retaining the
+    # current SD-root boot as the recovery path.
+    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI UBIFS_FS UBIFS_FS_LZO
     do
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
     done
