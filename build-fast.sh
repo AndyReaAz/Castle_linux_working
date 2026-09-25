@@ -8,6 +8,7 @@ TOOLCHAIN_PREFIX="${KERNEL_TOOLCHAIN_PREFIX:-arm-linux-gnueabihf-}"
 CROSS_COMPILE="$TOOLCHAIN_PREFIX"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 EXPECTED_RELEASE="6.18.35-linux4microchip-2026.04.2+"
+MODULES_STAGING="${KERNEL_MODULES_STAGING:-$ROOT/../staging/linux-6.18-modules}"
 
 export ARCH CROSS_COMPILE
 
@@ -79,6 +80,7 @@ show_config()
     echo "  ARCH          = $ARCH"
     echo "  CROSS_COMPILE = $CROSS_COMPILE"
     echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
+    echo "  MODULE STAGE  = $MODULES_STAGING"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
     grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
@@ -175,11 +177,29 @@ build_dtb()
     [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
 }
 
+stage_modules()
+{
+    rm -rf "$MODULES_STAGING"
+    mkdir -p "$MODULES_STAGING"
+
+    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
+
+    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$staged" ] || die "modules_install did not produce $staged"
+
+    # Buildroot regenerates dependency metadata after copying the tree and has
+    # no use for build/source links back into the kernel checkout.
+    rm -f "$staged/build" "$staged/source"
+
+    echo "Staged NextGen kernel modules: $staged"
+}
+
 build_fast()
 {
     make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
     [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
     [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+    stage_modules
 }
 
 case "${1:-build}" in
