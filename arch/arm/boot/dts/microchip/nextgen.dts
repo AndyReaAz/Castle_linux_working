@@ -131,14 +131,14 @@
 						#address-cells = <1>;
 						#size-cells = <1>;
 						
-						dtb@0 {
-							label = "device-tree";
-							reg = <0x00000000 0x00080000>;   /* 512 KiB */
-						};
-						
-						kernel@80000 {
-							label = "kernel";
-							reg = <0x00080000 0x00800000>;   /* 8 MiB */
+						boot@0 {
+							/*
+							 * Production boot objects are static volumes in this
+							 * small UBI device. Keeping it separate from rootfs
+							 * bounds the bootloader's UBI attach scan.
+							 */
+							label = "boot";
+							reg = <0x00000000 0x00880000>;   /* 8.5 MiB */
 						};
 						
 						rootfs@880000 {
