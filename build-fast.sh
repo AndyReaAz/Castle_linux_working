@@ -83,7 +83,7 @@ show_config()
     echo "  MODULE STAGE  = $MODULES_STAGING"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|EXT4_FS|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_SPI_NOR|MTD_SPI_NOR_USE_4K_SECTORS|MTD_UBI|MTD_UBI_FASTMAP|MTD_UBI_BLOCK|UBIFS_FS|UBIFS_FS_LZO|EXT4_FS|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
     grep -E '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=' "$OUT/.config" || true
 }
 
@@ -109,18 +109,25 @@ configure_fast()
     # warning while preserving the same setting.
     "$cfg" --file "$config" -d BASE_SMALL
 
-    # Keep the flash controller/NAND path resident in the kernel.  The first
-    # NAND-root profile also needs UBI and UBIFS built in: modules cannot be
-    # loaded before the root filesystem itself is available.
+    # Keep all flash components required before persistent storage is available
+    # resident in the kernel.  The SPI-NOR driver itself may remain a module:
+    # production boot does not need NOR after U-Boot hands over, while the SD
+    # bring-up image can load the module before reprogramming factory flash.
+    "$cfg" --file "$config" -e SPI
+    "$cfg" --file "$config" -e SPI_ATMEL
+    "$cfg" --file "$config" -e MTD
     "$cfg" --file "$config" -e SPI_ATMEL_QUADSPI
     "$cfg" --file "$config" -e MTD_SPI_NAND
     "$cfg" --file "$config" -e MTD_UBI
+    "$cfg" --file "$config" -e MTD_UBI_BLOCK
     "$cfg" --file "$config" -e UBIFS_FS
     "$cfg" --file "$config" -e UBIFS_FS_LZO
+    "$cfg" --file "$config" -m MTD_SPI_NOR
+    "$cfg" --file "$config" -e MTD_SPI_NOR_USE_4K_SECTORS
 
-    # RO-root/app-image profile support. These stay built in even for the
-    # legacy profiles so the same 6.18 kernel can boot either filesystem
-    # layout without an initramfs or early module loading.
+    # Immutable-system/application-image support.  Keep both SD/ext4 and
+    # NAND/UBI primitives built in so one 6.18 kernel can boot either physical
+    # container without an initramfs.
     "$cfg" --file "$config" -e EXT4_FS
     "$cfg" --file "$config" -e BLK_DEV_LOOP
     "$cfg" --file "$config" --set-val BLK_DEV_LOOP_MIN_COUNT 4
@@ -134,8 +141,8 @@ configure_fast()
     "$cfg" --file "$config" -d WILC1000_SDIO
     "$cfg" --file "$config" -d WILC1000_HW_OOB_INTR
 
-    # NextGen has latency-sensitive acquisition/UI work.  Use the normal
-    # fully preemptible kernel model while retaining the deployed HZ=100.
+    # NextGen has latency-sensitive acquisition/UI work. Use the normal fully
+    # preemptible kernel model while retaining the deployed HZ=100.
     "$cfg" --file "$config" -e PREEMPT
     "$cfg" --file "$config" -d PREEMPT_NONE
     "$cfg" --file "$config" -d PREEMPT_VOLUNTARY
@@ -155,70 +162,28 @@ configure_fast()
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
     done
 
-    # QSPI, SPI-NAND, UBI and UBIFS are intentionally built in.  This permits
-    # Linux to mount root=ubi0:rootfs without an initramfs while retaining the
-    # current SD-root boot as the recovery path.
-    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI UBIFS_FS UBIFS_FS_LZO \
-               EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
+    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
+               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
     do
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
     done
 
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
+    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
         die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
+    grep -q '^CONFIG_MODULES=y$' "$config" ||
+        die "CONFIG_MODULES is required for delayed device loading"
+    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
+        die "CONFIG_MTD_SPI_NOR did not resolve to m"
+    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
+        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
+    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
+        die "CONFIG_WILC1000_SPI did not resolve to m"
+    grep -q '^CONFIG_WILC1000=m$' "$config" ||
+        die "CONFIG_WILC1000 core did not resolve to m"
 
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
+        die "unexpected kernel release: $KERNELRELEASE"
 
     show_config
 }
@@ -226,7 +191,8 @@ esac
 build_dtb()
 {
     make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
 }
 
 stage_modules()
@@ -250,56 +216,8 @@ build_fast()
 {
     make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
     [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_MODULES is required for delayed WILC loading"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
+        die "nextgen.dtb was not produced"
     stage_modules
 }
 
