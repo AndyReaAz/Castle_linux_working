@@ -81,7 +81,7 @@ show_config()
     echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -115,6 +115,13 @@ configure_fast()
     "$cfg" --file "$config" -e UBIFS_FS
     "$cfg" --file "$config" -e UBIFS_FS_LZO
 
+    # RO-root/app-image profile support. These stay built in even for the
+    # legacy profiles so the same 6.18 kernel can boot either filesystem
+    # layout without an initramfs or early module loading.
+    "$cfg" --file "$config" -e BLK_DEV_LOOP
+    "$cfg" --file "$config" -e SQUASHFS
+    "$cfg" --file "$config" -e SQUASHFS_LZO
+
     # The 6.6 tree used CONFIG_WILC_SPI. Linux 6.18 uses the upstream-style
     # WILC1000 bus symbols. Keep SPI as a module because userspace deliberately
     # loads Wi-Fi only after NetworkManager is ready.
@@ -146,7 +153,8 @@ configure_fast()
     # QSPI, SPI-NAND, UBI and UBIFS are intentionally built in.  This permits
     # Linux to mount root=ubi0:rootfs without an initramfs while retaining the
     # current SD-root boot as the recovery path.
-    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI UBIFS_FS UBIFS_FS_LZO
+    for sym in SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI UBIFS_FS UBIFS_FS_LZO \
+               BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
     do
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
     done
