@@ -120,6 +120,7 @@ configure_fast()
     # RO-root/app-image profile support. These stay built in even for the
     # legacy profiles so the same 6.18 kernel can boot either filesystem
     # layout without an initramfs or early module loading.
+    "$cfg" --file "$config" -e EXT4_FS
     "$cfg" --file "$config" -e BLK_DEV_LOOP
     "$cfg" --file "$config" -e SQUASHFS
     "$cfg" --file "$config" -e SQUASHFS_LZO
