@@ -6,22 +6,27 @@ ACTION="${1:-build}"
 PROFILE="${2:-${NEXTGEN_KERNEL_PROFILE:-normal}}"
 
 case "$PROFILE" in
-    normal) DEFAULT_OUT="$ROOT/build-fast-6.18" ;;
-    bringup) DEFAULT_OUT="$ROOT/build-fast-6.18-bringup" ;;
-    *) die_early=1 ;;
+    normal)
+        DEFAULT_OUT="$ROOT/build-fast-6.18"
+        MODULES_STAGING_DEFAULT="$ROOT/../staging/linux-6.18-modules"
+        ;;
+    bringup)
+        DEFAULT_OUT="$ROOT/build-fast-6.18-bringup"
+        MODULES_STAGING_DEFAULT="$ROOT/../staging/linux-6.18-bringup-modules"
+        ;;
+    *)
+        echo "error: unknown kernel profile '$PROFILE' (expected normal or bringup)" >&2
+        exit 2
+        ;;
 esac
-if [ "${die_early:-0}" = 1 ]; then
-    echo "error: unknown kernel profile '$PROFILE' (expected normal or bringup)" >&2
-    exit 2
-fi
 
 OUT="${KERNEL_OUT:-$DEFAULT_OUT}"
+MODULES_STAGING="${KERNEL_MODULES_STAGING:-$MODULES_STAGING_DEFAULT}"
 ARCH=arm
 TOOLCHAIN_PREFIX="${KERNEL_TOOLCHAIN_PREFIX:-arm-linux-gnueabihf-}"
 CROSS_COMPILE="$TOOLCHAIN_PREFIX"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 EXPECTED_RELEASE="6.18.35-linux4microchip-2026.04.2+"
-MODULES_STAGING="${KERNEL_MODULES_STAGING:-$ROOT/../staging/linux-6.18-modules}"
 
 export ARCH CROSS_COMPILE
 
@@ -35,15 +40,15 @@ die()
 command -v "${TOOLCHAIN_PREFIX}gcc" >/dev/null 2>&1 ||
     die "ARM compiler not found: ${TOOLCHAIN_PREFIX}gcc"
 
-if [ "${KERNEL_CCACHE:-1}" = "1" ]; then
+if [ "${KERNEL_CCACHE:-1}" = 1 ]; then
     command -v ccache >/dev/null 2>&1 || die "ccache requested but not found"
     CC="ccache ${TOOLCHAIN_PREFIX}gcc"
     HOSTCC="ccache gcc"
     HOSTCXX="ccache g++"
 else
     CC="${TOOLCHAIN_PREFIX}gcc"
-    HOSTCC="gcc"
-    HOSTCXX="g++"
+    HOSTCC=gcc
+    HOSTCXX=g++
 fi
 export CC HOSTCC HOSTCXX
 
@@ -71,11 +76,6 @@ seed_config()
 
     grep -q '^CONFIG_ARCH_AT91=y$' "$OUT/.config" || die "base config is not AT91"
     grep -q '^CONFIG_SOC_SAMA5D2=y$' "$OUT/.config" || die "base config is not SAMA5D2"
-
-    # Do not require migrated/peripheral symbols to have a particular
-    # tristate value in the 6.6 seed.  The 6.18 profile below reasserts
-    # every boot-critical choice before olddefconfig and validates the
-    # resolved result afterwards.
 }
 
 make_kernel()
@@ -97,7 +97,7 @@ show_config()
     echo "  MODULE STAGE  = $MODULES_STAGING"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|VT|VT_CONSOLE|VT_HW_CONSOLE_BINDING|FRAMEBUFFER_CONSOLE|FRAMEBUFFER_CONSOLE_DETECT_PRIMARY|FONTS|FONT_8x16|MTD_SPI_NAND|MTD_SPI_NOR|MTD_SPI_NOR_USE_4K_SECTORS|MTD_UBI|MTD_UBI_FASTMAP|MTD_UBI_BLOCK|UBIFS_FS|UBIFS_FS_LZO|EXT4_FS|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(VT|VT_CONSOLE|VT_HW_CONSOLE_BINDING|FRAMEBUFFER_CONSOLE|FRAMEBUFFER_CONSOLE_DETECT_PRIMARY|FONTS|FONT_8x16|DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI|SPI_ATMEL|SPI_ATMEL_QUADSPI|MTD|MTD_SPI_NOR|MTD_SPI_NOR_USE_4K_SECTORS|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|MTD_UBI_BLOCK|UBIFS_FS|UBIFS_FS_LZO|EXT4_FS|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
     grep -E '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=' "$OUT/.config" || true
 }
 
@@ -117,16 +117,10 @@ configure_fast()
 
     "$cfg" --file "$config" --set-str LOCALVERSION "+"
     "$cfg" --file "$config" -d LOCALVERSION_AUTO
-
-    # BASE_SMALL was an integer in 6.6 (0 == disabled) and is a bool in
-    # 6.18. Translate the deployed value explicitly to avoid a stale-config
-    # warning while preserving the same setting.
     "$cfg" --file "$config" -d BASE_SMALL
 
-    # Keep all flash components required before persistent storage is available
-    # resident in the kernel.  The SPI-NOR driver itself may remain a module:
-    # production boot does not need NOR after U-Boot hands over, while the SD
-    # bring-up image can load the module before reprogramming factory flash.
+    # Boot/runtime storage primitives shared by the SD and production-NAND
+    # backends. Keep everything required before /persist is mounted built in.
     "$cfg" --file "$config" -e SPI
     "$cfg" --file "$config" -e SPI_ATMEL
     "$cfg" --file "$config" -e MTD
@@ -136,36 +130,35 @@ configure_fast()
     "$cfg" --file "$config" -e MTD_UBI_BLOCK
     "$cfg" --file "$config" -e UBIFS_FS
     "$cfg" --file "$config" -e UBIFS_FS_LZO
-    "$cfg" --file "$config" -m MTD_SPI_NOR
     "$cfg" --file "$config" -e MTD_SPI_NOR_USE_4K_SECTORS
 
-    # Immutable-system/application-image support.  Keep both SD/ext4 and
-    # NAND/UBI primitives built in so one 6.18 kernel can boot either physical
-    # container without an initramfs.
+    # Production boot no longer needs NOR after U-Boot hand-off, so the normal
+    # runtime keeps SPI-NOR deferred. The service bring-up image needs direct
+    # built-in NOR access for destructive provisioning.
+    if [ "$PROFILE" = bringup ]; then
+        "$cfg" --file "$config" -e MTD_SPI_NOR
+    else
+        "$cfg" --file "$config" -m MTD_SPI_NOR
+    fi
+
     "$cfg" --file "$config" -e EXT4_FS
     "$cfg" --file "$config" -e BLK_DEV_LOOP
     "$cfg" --file "$config" --set-val BLK_DEV_LOOP_MIN_COUNT 4
     "$cfg" --file "$config" -e SQUASHFS
     "$cfg" --file "$config" -e SQUASHFS_LZO
 
-    # The 6.6 tree used CONFIG_WILC_SPI. Linux 6.18 uses the upstream-style
-    # WILC1000 bus symbols. Keep SPI as a module because userspace deliberately
-    # loads Wi-Fi only after NetworkManager is ready.
+    # WILC remains an application-owned delayed module.
     "$cfg" --file "$config" -m WILC1000_SPI
     "$cfg" --file "$config" -d WILC1000_SDIO
     "$cfg" --file "$config" -d WILC1000_HW_OOB_INTR
 
-    # NextGen has latency-sensitive acquisition/UI work. Use the normal fully
-    # preemptible kernel model while retaining the deployed HZ=100.
     "$cfg" --file "$config" -e PREEMPT
     "$cfg" --file "$config" -d PREEMPT_NONE
     "$cfg" --file "$config" -d PREEMPT_VOLUNTARY
     "$cfg" --file "$config" -d PREEMPT_RT
 
-    # Bring-up cards reserve the LCD for explicit operator status. The UART is
-    # still the kernel console; the provisioning helper writes /dev/tty1.
+    # Bring-up cards reserve fbcon/tty1 for the operator progress screen.
     if [ "$PROFILE" = bringup ]; then
-        "$cfg" --file "$config" -e MTD_SPI_NOR
         "$cfg" --file "$config" -d LOGO
         "$cfg" --file "$config" -e VT
         "$cfg" --file "$config" -e VT_CONSOLE
@@ -181,31 +174,49 @@ configure_fast()
 
     make_kernel olddefconfig
 
-    grep -q '^CONFIG_KERNEL_LZ4=y    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
+    grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" ||
+        die "CONFIG_KERNEL_LZ4 did not resolve to y"
+    grep -q '^CONFIG_PREEMPT=y$' "$config" ||
+        die "CONFIG_PREEMPT did not resolve to y"
+
+    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
                MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
                DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
+               SND_AUDIO_GRAPH_CARD2 TI_ADS131A \
+               SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
                UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
     do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
+        grep -q "^CONFIG_${sym}=y$" "$config" ||
+            die "CONFIG_${sym} did not resolve to y"
     done
 
     grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
         die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
     grep -q '^CONFIG_MODULES=y$' "$config" ||
         die "CONFIG_MODULES is required for delayed device loading"
-    if [ "$PROFILE" = bringup ]; then
-        grep -q '^CONFIG_MTD_SPI_NOR=y    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
+    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
         die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
     grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
         die "CONFIG_WILC1000_SPI did not resolve to m"
     grep -q '^CONFIG_WILC1000=m$' "$config" ||
         die "CONFIG_WILC1000 core did not resolve to m"
+
+    if [ "$PROFILE" = bringup ]; then
+        grep -q '^CONFIG_MTD_SPI_NOR=y$' "$config" ||
+            die "bring-up CONFIG_MTD_SPI_NOR did not resolve to y"
+        grep -q '^# CONFIG_LOGO is not set$' "$config" ||
+            die "bring-up CONFIG_LOGO must be disabled"
+        for sym in VT VT_CONSOLE VT_HW_CONSOLE_BINDING FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FONT_8x16
+        do
+            grep -q "^CONFIG_${sym}=y$" "$config" ||
+                die "bring-up CONFIG_${sym} did not resolve to y"
+        done
+    else
+        grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
+            die "normal CONFIG_MTD_SPI_NOR did not resolve to m"
+        grep -q '^# CONFIG_FRAMEBUFFER_CONSOLE is not set$' "$config" ||
+            die "normal profile unexpectedly enables framebuffer console"
+    fi
 
     KERNELRELEASE="$(make_kernel -s kernelrelease)"
     [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
@@ -230,9 +241,6 @@ stage_modules()
 
     staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
     [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
     rm -f "$staged/build" "$staged/source"
 
     echo "Staged NextGen kernel modules: $staged"
@@ -248,1077 +256,28 @@ build_fast()
 }
 
 case "$ACTION" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean] [normal|bringup]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
-    grep -q '^CONFIG_PREEMPT=y    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_PREEMPT did not resolve to y"
-
-    if [ "$PROFILE" = bringup ]; then
-        grep -q '^# CONFIG_LOGO is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "bring-up CONFIG_LOGO must be disabled"
-        for sym in MTD_SPI_NOR VT VT_CONSOLE VT_HW_CONSOLE_BINDING FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FONT_8x16
-        do
-            grep -q "^CONFIG_${sym}=y$" "$config" ||
-                die "bring-up CONFIG_${sym} did not resolve to y"
-        done
-    else
-        grep -q '^# CONFIG_FRAMEBUFFER_CONSOLE is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "normal profile unexpectedly enables framebuffer console"
-    fi
-
-    # These were required built-in by the known-good 6.6 fast-boot profile.
-    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "bring-up CONFIG_MTD_SPI_NOR did not resolve to y"
-    else
-        grep -q '^CONFIG_MTD_SPI_NOR=m    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
-    grep -q '^CONFIG_PREEMPT=y    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_PREEMPT did not resolve to y"
-
-    if [ "$PROFILE" = bringup ]; then
-        grep -q '^# CONFIG_LOGO is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "bring-up CONFIG_LOGO must be disabled"
-        for sym in MTD_SPI_NOR VT VT_CONSOLE VT_HW_CONSOLE_BINDING FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FONT_8x16
-        do
-            grep -q "^CONFIG_${sym}=y$" "$config" ||
-                die "bring-up CONFIG_${sym} did not resolve to y"
-        done
-    else
-        grep -q '^# CONFIG_FRAMEBUFFER_CONSOLE is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "normal profile unexpectedly enables framebuffer console"
-    fi
-
-    # These were required built-in by the known-good 6.6 fast-boot profile.
-    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    fi
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
-    grep -q '^CONFIG_PREEMPT=y    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" || die "CONFIG_PREEMPT did not resolve to y"
-
-    if [ "$PROFILE" = bringup ]; then
-        grep -q '^# CONFIG_LOGO is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "bring-up CONFIG_LOGO must be disabled"
-        for sym in MTD_SPI_NOR VT VT_CONSOLE VT_HW_CONSOLE_BINDING FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FONT_8x16
-        do
-            grep -q "^CONFIG_${sym}=y$" "$config" ||
-                die "bring-up CONFIG_${sym} did not resolve to y"
-        done
-    else
-        grep -q '^# CONFIG_FRAMEBUFFER_CONSOLE is not set    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
-esac
- "$config" ||
-            die "normal profile unexpectedly enables framebuffer console"
-    fi
-
-    # These were required built-in by the known-good 6.6 fast-boot profile.
-    for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
-               MFD_ATMEL_HLCDC FB FB_SIMPLE BACKLIGHT_CLASS_DEVICE BACKLIGHT_PWM PWM PWM_ATMEL_HLCDC_PWM \
-               DMADEVICES AT_XDMAC ATMEL_SSC SND_ATMEL_SOC_SSC SND_ATMEL_SOC_SSC_DMA \
-               SND_AUDIO_GRAPH_CARD2 TI_ADS131A
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not remain built-in"
-    done
-
-    for sym in SPI SPI_ATMEL MTD SPI_ATMEL_QUADSPI MTD_SPI_NAND MTD_UBI MTD_UBI_BLOCK \
-               UBIFS_FS UBIFS_FS_LZO EXT4_FS BLK_DEV_LOOP SQUASHFS SQUASHFS_LZO
-    do
-        grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
-    done
-
-    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4$' "$config" ||
-        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
-    grep -q '^CONFIG_MODULES=y$' "$config" ||
-        die "CONFIG_MODULES is required for delayed device loading"
-    grep -q '^CONFIG_MTD_SPI_NOR=m$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR did not resolve to m"
-    grep -q '^CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y$' "$config" ||
-        die "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS did not resolve to y"
-    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" ||
-        die "CONFIG_WILC1000_SPI did not resolve to m"
-    grep -q '^CONFIG_WILC1000=m$' "$config" ||
-        die "CONFIG_WILC1000 core did not resolve to m"
-
-    KERNELRELEASE="$(make_kernel -s kernelrelease)"
-    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] ||
-        die "unexpected kernel release: $KERNELRELEASE"
-
-    show_config
-}
-
-build_dtb()
-{
-    make_kernel -j"$JOBS" microchip/nextgen.dtb
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-}
-
-stage_modules()
-{
-    rm -rf "$MODULES_STAGING"
-    mkdir -p "$MODULES_STAGING"
-
-    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
-
-    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
-    [ -d "$staged" ] || die "modules_install did not produce $staged"
-
-    # Buildroot regenerates dependency metadata after copying the tree and has
-    # no use for build/source links back into the kernel checkout.
-    rm -f "$staged/build" "$staged/source"
-
-    echo "Staged NextGen kernel modules: $staged"
-}
-
-build_fast()
-{
-    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
-    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
-    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] ||
-        die "nextgen.dtb was not produced"
-    stage_modules
-}
-
-case "${1:-build}" in
-    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
-    config) configure_fast ;;
-    dtb) configure_fast; build_dtb ;;
-    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
-    build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
+    clean)
+        rm -rf "$OUT"
+        echo "Removed $OUT"
+        ;;
+    config)
+        configure_fast
+        ;;
+    dtb)
+        configure_fast
+        build_dtb
+        ;;
+    rebuild)
+        rm -rf "$OUT"
+        configure_fast
+        build_fast
+        ;;
+    build)
+        configure_fast
+        build_fast
+        ;;
+    *)
+        echo "Usage: $0 [build|rebuild|config|dtb|clean] [normal|bringup]" >&2
+        exit 2
+        ;;
 esac
