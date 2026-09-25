@@ -2,7 +2,23 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-OUT="${KERNEL_OUT:-$ROOT/build-fast-6.18}"
+ACTION="${1:-build}"
+PROFILE="${2:-${NEXTGEN_KERNEL_PROFILE:-normal}}"
+
+case "$PROFILE" in
+    normal)
+        DEFAULT_OUT="$ROOT/build-fast-6.18"
+        ;;
+    bringup)
+        DEFAULT_OUT="$ROOT/build-fast-6.18-bringup"
+        ;;
+    *)
+        echo "error: unknown kernel profile '$PROFILE' (expected normal or bringup)" >&2
+        exit 2
+        ;;
+esac
+
+OUT="${KERNEL_OUT:-$DEFAULT_OUT}"
 ARCH=arm
 TOOLCHAIN_PREFIX="${KERNEL_TOOLCHAIN_PREFIX:-arm-linux-gnueabihf-}"
 CROSS_COMPILE="$TOOLCHAIN_PREFIX"
@@ -76,12 +92,13 @@ show_config()
 {
     echo
     echo "NextGen Linux 6.18 profile:"
+    echo "  PROFILE       = $PROFILE"
     echo "  ARCH          = $ARCH"
     echo "  CROSS_COMPILE = $CROSS_COMPILE"
     echo "  RELEASE       = ${KERNELRELEASE:-not-built}"
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
-    grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_(VT|VT_CONSOLE|VT_HW_CONSOLE_BINDING|FRAMEBUFFER_CONSOLE|FRAMEBUFFER_CONSOLE_DETECT_PRIMARY|FONTS|FONT_8x16|DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NOR|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -129,10 +146,40 @@ configure_fast()
     "$cfg" --file "$config" -d PREEMPT_VOLUNTARY
     "$cfg" --file "$config" -d PREEMPT_RT
 
+    # Bring-up cards reserve the LCD for explicit operator status. The UART
+    # remains the only kernel console; the provisioning script writes /dev/tty1.
+    if [ "$PROFILE" = "bringup" ]; then
+        "$cfg" --file "$config" -e MTD_SPI_NOR
+        "$cfg" --file "$config" -d LOGO
+        "$cfg" --file "$config" -e VT
+        "$cfg" --file "$config" -e VT_CONSOLE
+        "$cfg" --file "$config" -e VT_HW_CONSOLE_BINDING
+        "$cfg" --file "$config" -e FRAMEBUFFER_CONSOLE
+        "$cfg" --file "$config" -e FRAMEBUFFER_CONSOLE_DETECT_PRIMARY
+        "$cfg" --file "$config" -e FONTS
+        "$cfg" --file "$config" -e FONT_8x16
+    else
+        "$cfg" --file "$config" -d FRAMEBUFFER_CONSOLE
+        "$cfg" --file "$config" -d FRAMEBUFFER_CONSOLE_DETECT_PRIMARY
+    fi
+
     make_kernel olddefconfig
 
     grep -q '^CONFIG_KERNEL_LZ4=y$' "$config" || die "CONFIG_KERNEL_LZ4 did not resolve to y"
     grep -q '^CONFIG_PREEMPT=y$' "$config" || die "CONFIG_PREEMPT did not resolve to y"
+
+    if [ "$PROFILE" = "bringup" ]; then
+        grep -q '^# CONFIG_LOGO is not set$' "$config" ||
+            die "bring-up CONFIG_LOGO must be disabled"
+        for sym in MTD_SPI_NOR VT VT_CONSOLE VT_HW_CONSOLE_BINDING FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FONT_8x16
+        do
+            grep -q "^CONFIG_${sym}=y$" "$config" ||
+                die "bring-up CONFIG_${sym} did not resolve to y"
+        done
+    else
+        grep -q '^# CONFIG_FRAMEBUFFER_CONSOLE is not set$' "$config" ||
+            die "normal profile unexpectedly enables framebuffer console"
+    fi
 
     # These were required built-in by the known-good 6.6 fast-boot profile.
     for sym in ARCH_AT91 SOC_SAMA5D2 DRM DRM_FBDEV_EMULATION DRM_ATMEL_HLCDC DRM_PANEL_SIMPLE \
@@ -174,11 +221,11 @@ build_fast()
     [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
 }
 
-case "${1:-build}" in
+case "$ACTION" in
     clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
     config) configure_fast ;;
     dtb) configure_fast; build_dtb ;;
     rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
     build) configure_fast; build_fast ;;
-    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [build|rebuild|config|dtb|clean] [normal|bringup]" >&2; exit 2 ;;
 esac
