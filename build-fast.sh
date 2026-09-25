@@ -84,6 +84,7 @@ show_config()
     grep -E '^CONFIG_MODULES=' "$OUT/.config" || true
     grep -E '^CONFIG_KERNEL_(LZ4|GZIP|BZIP2|LZMA|XZ|LZO|ZSTD|UNCOMPRESSED)=' "$OUT/.config" || true
     grep -E '^CONFIG_(DMADEVICES|AT_XDMAC|DRM|DRM_FBDEV_EMULATION|DRM_ATMEL_HLCDC|DRM_PANEL_SIMPLE|MFD_ATMEL_HLCDC|FB|FB_SIMPLE|BACKLIGHT_CLASS_DEVICE|BACKLIGHT_PWM|PWM|PWM_ATMEL_HLCDC_PWM|SPI_ATMEL_QUADSPI|MTD_SPI_NAND|MTD_UBI|MTD_UBI_FASTMAP|UBIFS_FS|UBIFS_FS_LZO|EXT4_FS|BLK_DEV_LOOP|SQUASHFS|SQUASHFS_LZO|ATMEL_SSC|SND_SOC|SND_ATMEL_SOC_SSC_DMA|SND_ATMEL_SOC_SSC|TI_ADS131A|SND_AUDIO_GRAPH_CARD2|WILC1000|WILC1000_SPI|WILC1000_SDIO)=' "$OUT/.config" || true
+    grep -E '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=' "$OUT/.config" || true
 }
 
 configure_fast()
@@ -122,6 +123,7 @@ configure_fast()
     # layout without an initramfs or early module loading.
     "$cfg" --file "$config" -e EXT4_FS
     "$cfg" --file "$config" -e BLK_DEV_LOOP
+    "$cfg" --file "$config" --set-val BLK_DEV_LOOP_MIN_COUNT 4
     "$cfg" --file "$config" -e SQUASHFS
     "$cfg" --file "$config" -e SQUASHFS_LZO
 
@@ -162,7 +164,105 @@ configure_fast()
         grep -q "^CONFIG_${sym}=y$" "$config" || die "CONFIG_${sym} did not resolve to y"
     done
 
-    grep -q '^CONFIG_MODULES=y$' "$config" || die "CONFIG_MODULES is required for delayed WILC loading"
+    grep -q '^CONFIG_BLK_DEV_LOOP_MIN_COUNT=4    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
+    grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+
+    show_config
+}
+
+build_dtb()
+{
+    make_kernel -j"$JOBS" microchip/nextgen.dtb
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+}
+
+stage_modules()
+{
+    rm -rf "$MODULES_STAGING"
+    mkdir -p "$MODULES_STAGING"
+
+    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
+
+    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$staged" ] || die "modules_install did not produce $staged"
+
+    # Buildroot regenerates dependency metadata after copying the tree and has
+    # no use for build/source links back into the kernel checkout.
+    rm -f "$staged/build" "$staged/source"
+
+    echo "Staged NextGen kernel modules: $staged"
+}
+
+build_fast()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+    stage_modules
+}
+
+case "${1:-build}" in
+    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
+    config) configure_fast ;;
+    dtb) configure_fast; build_dtb ;;
+    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
+    build) configure_fast; build_fast ;;
+    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
+esac
+ "$config" ||
+        die "CONFIG_BLK_DEV_LOOP_MIN_COUNT did not resolve to 4"
+    grep -q '^CONFIG_MODULES=y    grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
+    grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
+
+    KERNELRELEASE="$(make_kernel -s kernelrelease)"
+    [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || die "unexpected kernel release: $KERNELRELEASE"
+
+    show_config
+}
+
+build_dtb()
+{
+    make_kernel -j"$JOBS" microchip/nextgen.dtb
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+}
+
+stage_modules()
+{
+    rm -rf "$MODULES_STAGING"
+    mkdir -p "$MODULES_STAGING"
+
+    make_kernel INSTALL_MOD_PATH="$MODULES_STAGING" modules_install
+
+    staged="$MODULES_STAGING/lib/modules/$EXPECTED_RELEASE"
+    [ -d "$staged" ] || die "modules_install did not produce $staged"
+
+    # Buildroot regenerates dependency metadata after copying the tree and has
+    # no use for build/source links back into the kernel checkout.
+    rm -f "$staged/build" "$staged/source"
+
+    echo "Staged NextGen kernel modules: $staged"
+}
+
+build_fast()
+{
+    make_kernel -j"$JOBS" zImage microchip/nextgen.dtb modules
+    [ -f "$OUT/arch/arm/boot/zImage" ] || die "zImage was not produced"
+    [ -f "$OUT/arch/arm/boot/dts/microchip/nextgen.dtb" ] || die "nextgen.dtb was not produced"
+    stage_modules
+}
+
+case "${1:-build}" in
+    clean) rm -rf "$OUT"; echo "Removed $OUT" ;;
+    config) configure_fast ;;
+    dtb) configure_fast; build_dtb ;;
+    rebuild) rm -rf "$OUT"; configure_fast; build_fast ;;
+    build) configure_fast; build_fast ;;
+    *) echo "Usage: $0 [build|rebuild|config|dtb|clean]" >&2; exit 2 ;;
+esac
+ "$config" || die "CONFIG_MODULES is required for delayed WILC loading"
     grep -q '^CONFIG_WILC1000_SPI=m$' "$config" || die "CONFIG_WILC1000_SPI did not resolve to m"
     grep -q '^CONFIG_WILC1000=m$' "$config" || die "CONFIG_WILC1000 core did not resolve to m"
 
