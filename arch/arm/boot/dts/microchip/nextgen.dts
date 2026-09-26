@@ -690,6 +690,10 @@
 				
 			};
 			/*
+			 * NextGen does not use the SAMA5D2 hardware crypto engines.
+			 * Keep the devices disabled so eudev coldplug does not probe
+			 * and load three otherwise idle accelerator drivers.
+			 */
 			sha: crypto@f0028000 {
 				status = "disabled";
 			};
@@ -700,7 +704,6 @@
 			tdes: crypto@fc044000 {
 				status = "disabled";
 			};
-			*/
 		};
 	};
 	
