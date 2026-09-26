@@ -1,17 +1,9 @@
 name: NextGen Linux 6.18 build
 
+# Local incremental builds are the current integration path. Do not launch
+# another full kernel build on every source/wrapper correction.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - chatgpt/ro-root-image-slots
-    paths:
-      - build-fast.sh
-      - arch/arm/boot/dts/microchip/nextgen.dts
-      - arch/arm/configs/sama5_defconfig
-      - drivers/**
-      - sound/**
-      - .github/workflows/nextgen-build.yml
 
 permissions:
   contents: write
@@ -32,6 +24,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Check board configuration before installing tools
+        run: |
+          /bin/sh -n build-fast.sh
+          test -s arch/arm/configs/nextgen_defconfig || {
+            echo 'Import the proven NextGen board defconfig before running the clean CI build.' >&2
+            exit 1
+          }
 
       - name: Install ARM build prerequisites
         run: |
@@ -70,12 +70,8 @@ jobs:
           cp build-fast-6.18-bringup/arch/arm/boot/dts/microchip/nextgen.dtb "$out/bringup/"
           cp build-fast-6.18-bringup/.config "$out/bringup/config"
 
-          if [ -d ../staging/linux-6.18-modules/lib/modules ]; then
-            tar -C ../staging/linux-6.18-modules -czf "$out/normal/modules.tar.gz" lib/modules
-          fi
-          if [ -d ../staging/linux-6.18-bringup-modules/lib/modules ]; then
-            tar -C ../staging/linux-6.18-bringup-modules -czf "$out/bringup/modules.tar.gz" lib/modules
-          fi
+          tar -C ../staging/linux-6.18-modules -czf "$out/normal/modules.tar.gz" lib/modules
+          tar -C ../staging/linux-6.18-bringup-modules -czf "$out/bringup/modules.tar.gz" lib/modules
 
           cp linux-normal.log linux-bringup.log "$out/"
           printf '%s\n' "${GITHUB_SHA}" > "$out/source-revision.txt"
@@ -83,6 +79,15 @@ jobs:
 
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/nextgen-kernel-${GITHUB_SHA}.tar.gz" nextgen-kernel
           sha256sum "$RUNNER_TEMP/nextgen-kernel-${GITHUB_SHA}.tar.gz"
+
+      - name: Retain build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextgen-kernel-logs-${{ github.sha }}
+          path: linux-*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - uses: actions/upload-artifact@v4
         with:
@@ -92,7 +97,6 @@ jobs:
           retention-days: 14
 
       - name: Publish reusable kernel release
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -101,5 +105,5 @@ jobs:
           gh release create "$tag" "$asset" \
             --target "$GITHUB_SHA" \
             --title "NextGen Linux 6.18 ${GITHUB_SHA}" \
-            --notes "Reproducible normal and bring-up kernel artifacts for the ro-persist-v1 baseline." \
+            --notes "Normal and bring-up kernel build outputs for ro-persist-v1. Compilation is not hardware boot validation." \
             --prerelease
