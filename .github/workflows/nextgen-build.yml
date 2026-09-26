@@ -1,0 +1,105 @@
+name: NextGen Linux 6.18 build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chatgpt/ro-root-image-slots
+    paths:
+      - build-fast.sh
+      - arch/arm/boot/dts/microchip/nextgen.dts
+      - arch/arm/configs/sama5_defconfig
+      - drivers/**
+      - sound/**
+      - .github/workflows/nextgen-build.yml
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  JOBS: 4
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ARM build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+            build-essential bc bison flex lz4 ccache libssl-dev libelf-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: nextgen-linux-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            nextgen-linux-ccache-${{ runner.os }}-${{ github.ref_name }}-
+            nextgen-linux-ccache-${{ runner.os }}-
+
+      - name: Build normal kernel
+        run: |
+          ./build-fast.sh rebuild normal 2>&1 | tee linux-normal.log
+
+      - name: Build bring-up kernel
+        run: |
+          ./build-fast.sh rebuild bringup 2>&1 | tee linux-bringup.log
+
+      - name: Package verified kernel outputs
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/nextgen-kernel"
+          mkdir -p "$out/normal" "$out/bringup"
+
+          cp build-fast-6.18/arch/arm/boot/zImage "$out/normal/"
+          cp build-fast-6.18/arch/arm/boot/dts/microchip/nextgen.dtb "$out/normal/"
+          cp build-fast-6.18/.config "$out/normal/config"
+
+          cp build-fast-6.18-bringup/arch/arm/boot/zImage "$out/bringup/"
+          cp build-fast-6.18-bringup/arch/arm/boot/dts/microchip/nextgen.dtb "$out/bringup/"
+          cp build-fast-6.18-bringup/.config "$out/bringup/config"
+
+          if [ -d ../staging/linux-6.18-modules/lib/modules ]; then
+            tar -C ../staging/linux-6.18-modules -czf "$out/normal/modules.tar.gz" lib/modules
+          fi
+          if [ -d ../staging/linux-6.18-bringup-modules/lib/modules ]; then
+            tar -C ../staging/linux-6.18-bringup-modules -czf "$out/bringup/modules.tar.gz" lib/modules
+          fi
+
+          cp linux-normal.log linux-bringup.log "$out/"
+          printf '%s\n' "${GITHUB_SHA}" > "$out/source-revision.txt"
+          (cd "$out" && find normal bringup -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/nextgen-kernel-${GITHUB_SHA}.tar.gz" nextgen-kernel
+          sha256sum "$RUNNER_TEMP/nextgen-kernel-${GITHUB_SHA}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextgen-kernel-${{ github.sha }}
+          path: ${{ runner.temp }}/nextgen-kernel/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish reusable kernel release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nextgen-kernel-${GITHUB_SHA}"
+          asset="$RUNNER_TEMP/nextgen-kernel-${GITHUB_SHA}.tar.gz"
+          gh release create "$tag" "$asset" \
+            --target "$GITHUB_SHA" \
+            --title "NextGen Linux 6.18 ${GITHUB_SHA}" \
+            --notes "Reproducible normal and bring-up kernel artifacts for the ro-persist-v1 baseline." \
+            --prerelease
